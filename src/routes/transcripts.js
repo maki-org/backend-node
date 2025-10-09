@@ -6,6 +6,7 @@ const { transcriptionLimiter } = require('../middleware/rateLimiter');
 const asyncHandler = require('../utils/asyncHandler');
 const Transcript = require('../models/Transcript');
 const { processTranscription } = require('../services/transcriptionService');
+const { logger } = require('../utils/logger');
 
 const router = express.Router();
 

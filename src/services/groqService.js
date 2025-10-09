@@ -47,11 +47,10 @@ async function transcribeAudio(audioBuffer, numSpeakers = 2) {
   }
 }
 
-// ... rest stays the same
+
 async function extractInsights(fullTranscript, speakers) {
   const client = getGroqClient();
   
-  // Truncate if too long to avoid token limits
   const maxLength = 15000;
   const truncatedTranscript = fullTranscript.length > maxLength 
     ? fullTranscript.substring(0, maxLength) + '...[truncated]'
@@ -61,7 +60,7 @@ async function extractInsights(fullTranscript, speakers) {
     `${s.label}: ${s.segments.slice(0, 3).map(seg => seg.text).join(' ')}`
   ).join('\n');
 
-  const prompt = `Analyze this meeting transcript and extract insights PER SPEAKER.
+const prompt = `Analyze this meeting transcript and extract insights PER SPEAKER.
 
 Transcript:
 ${truncatedTranscript}
@@ -73,6 +72,10 @@ Extract:
 1. Action items per speaker
 2. Key information per speaker  
 3. Reminders with exact deadline phrasing
+
+IMPORTANT RULES:
+- priority must be ONLY: "high", "normal", or "low" (NOT "medium")
+- category must be ONLY: "meeting", "call", "task", "deadline", "personal", "email", "followup"
 
 Return ONLY valid JSON:
 {

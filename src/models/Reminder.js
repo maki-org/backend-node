@@ -38,7 +38,7 @@ const reminderSchema = new mongoose.Schema({
   
   category: {
     type: String,
-    enum: ['meeting', 'call', 'task', 'deadline', 'personal'],
+    enum: ['meeting', 'call', 'task', 'deadline', 'personal', 'email', 'followup'], 
     default: 'task'
   },
   

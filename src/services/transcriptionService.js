@@ -1,3 +1,4 @@
+// src/services/transcriptionService.js
 const { transcribeAudio, extractInsights } = require('./groqService');
 const { parseDateTimeFromText } = require('./dateParser');
 const Transcript = require('../models/Transcript');
@@ -14,12 +15,10 @@ async function processTranscription(transcriptId, audioBuffer) {
     transcript.status = 'processing';
     await transcript.save();
 
-    
     const segments = await transcribeAudio(
       audioBuffer, 
       transcript.metadata.expectedSpeakers
     );
-    
     
     audioBuffer = null;
     if (global.gc) global.gc();
@@ -70,21 +69,44 @@ function groupBySpeaker(segments) {
 }
 
 async function saveReminders(reminders, transcript) {
-  const reminderDocs = reminders.map(reminder => ({
-    userId: transcript.userId,
-    clerkId: transcript.clerkId,
-    transcriptId: transcript._id,
-    title: reminder.title.trim(),
-    from: reminder.from,
-    extractedFrom: reminder.extracted_from,
-    dueDate: reminder.due_date_text ? parseDateTimeFromText(reminder.due_date_text) : null,
-    dueDateText: reminder.due_date_text,
-    priority: reminder.priority || 'normal',
-    category: reminder.category || 'task'
-  }));
+  const validCategories = ['meeting', 'call', 'task', 'deadline', 'personal', 'email', 'followup'];
+  const validPriorities = ['high', 'normal', 'low'];
+  
+  const reminderDocs = reminders.map(reminder => {
+    
+    let category = (reminder.category || 'task').toLowerCase();
+    if (!validCategories.includes(category)) {
+      logger.warn(`Invalid category "${category}" replaced with "task"`);
+      category = 'task';
+    }
+
+    
+    let priority = (reminder.priority || 'normal').toLowerCase();
+    if (priority === 'medium') {
+      priority = 'normal';
+    }
+    if (!validPriorities.includes(priority)) {
+      logger.warn(`Invalid priority "${priority}" replaced with "normal"`);
+      priority = 'normal';
+    }
+
+    return {
+      userId: transcript.userId,
+      clerkId: transcript.clerkId,
+      transcriptId: transcript._id,
+      title: reminder.title.trim(),
+      from: reminder.from,
+      extractedFrom: reminder.extracted_from,
+      dueDate: reminder.due_date_text ? parseDateTimeFromText(reminder.due_date_text) : null,
+      dueDateText: reminder.due_date_text,
+      priority: priority,
+      category: category
+    };
+  });
 
   if (reminderDocs.length > 0) {
     await Reminder.insertMany(reminderDocs);
+    logger.info(`Saved ${reminderDocs.length} reminders`);
   }
 }
 
