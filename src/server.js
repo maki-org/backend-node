@@ -3,7 +3,7 @@ const http = require('http');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-const { clerkAuth } = require('./middleware/auth'); // UPDATED
+const { clerkAuth } = require('./middleware/auth');
 require('dotenv').config();
 
 const { connectDatabase } = require('./config/database');
@@ -23,7 +23,7 @@ app.use(helmet());
 
 app.use(cors({
   origin: [
-    process.env.FRONTEND_URL,
+    process.env.FRONTEND_URL || 'http://localhost:8080',
     'http://localhost:5173',
     'http://localhost:8080'
   ],
@@ -37,7 +37,6 @@ app.use(morgan('combined', {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Apply Clerk middleware (UPDATED - no redirect for API)
 app.use(clerkAuth);
 
 app.use('/health', healthRoutes);
@@ -70,7 +69,7 @@ async function startServer() {
     global.io = io;
     logger.info('✓ WebSocket initialized');
 
-    const PORT = process.env.PORT || 3000;
+    const PORT = process.env.PORT || 8000;
     server.listen(PORT, '0.0.0.0', () => {
       logger.info(`✓ Server running on port ${PORT}`);
       logger.info(`✓ Environment: ${process.env.NODE_ENV}`);

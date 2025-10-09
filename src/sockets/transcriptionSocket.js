@@ -5,7 +5,7 @@ const { logger } = require('../utils/logger');
 function initializeSocketServer(httpServer) {
   const io = new Server(httpServer, {
     cors: {
-      origin: process.env.FRONTEND_URL,
+      origin: process.env.FRONTEND_URL || 'http://localhost:8080',
       credentials: true
     },
     pingTimeout: 60000,
@@ -17,22 +17,32 @@ function initializeSocketServer(httpServer) {
       const token = socket.handshake.auth.token;
       
       if (!token) {
+        logger.error('Socket auth: No token provided');
         return next(new Error('No token provided'));
       }
       
-      const { userId } = await clerkClient.verifyToken(token);
-      
-      socket.data.clerkId = userId;
-      next();
+      try {
+        // Use clerkClient.verifyToken from @clerk/express
+        const session = await clerkClient.sessions.verifyToken(token, {
+          secretKey: process.env.CLERK_SECRET_KEY
+        });
+        
+        socket.data.clerkId = session.userId;
+        logger.info(`✓ Socket authenticated: ${session.userId}`);
+        next();
+      } catch (verifyError) {
+        logger.error('Token verification failed:', verifyError.message);
+        return next(new Error('Invalid token'));
+      }
     } catch (error) {
-      logger.error('Socket auth failed:', error);
+      logger.error('Socket auth failed:', error.message);
       next(new Error('Authentication failed'));
     }
   });
 
   io.on('connection', (socket) => {
     const clerkId = socket.data.clerkId;
-    logger.info(`Socket connected: ${clerkId}`);
+    logger.info(`✓ Socket connected: ${clerkId}`);
     
     socket.join(`user:${clerkId}`);
     

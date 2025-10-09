@@ -1,4 +1,3 @@
-// src/services/transcriptionService.js
 const { transcribeAudio, extractInsights } = require('./groqService');
 const { parseDateTimeFromText } = require('./dateParser');
 const Transcript = require('../models/Transcript');
@@ -10,11 +9,22 @@ async function processTranscription(transcriptId, audioBuffer) {
   if (!transcript) throw new Error('Transcript not found');
 
   const startTime = Date.now();
+  const clerkId = transcript.clerkId;
 
   try {
+  
     transcript.status = 'processing';
     await transcript.save();
 
+   
+    emitToUser(clerkId, 'transcription:status', {
+      transcriptId: transcript._id,
+      status: 'processing',
+      message: 'Processing audio...'
+    });
+
+    // Transcribe audio
+    logger.info(`Starting transcription for ${transcriptId}`);
     const segments = await transcribeAudio(
       audioBuffer, 
       transcript.metadata.expectedSpeakers
@@ -23,11 +33,21 @@ async function processTranscription(transcriptId, audioBuffer) {
     audioBuffer = null;
     if (global.gc) global.gc();
 
+    // Emit transcription progress
+    emitToUser(clerkId, 'transcription:progress', {
+      transcriptId: transcript._id,
+      stage: 'transcribed',
+      message: 'Audio transcribed, extracting insights...'
+    });
+
     const fullText = segments.map(s => s.text).join(' ');
     const speakers = groupBySpeaker(segments);
 
+    // Extract insights
+    logger.info(`Extracting insights for ${transcriptId}`);
     const insights = await extractInsights(fullText, speakers);
 
+    // Save transcript
     transcript.status = 'completed';
     transcript.transcript = { fullText, speakers };
     transcript.insights = insights;
@@ -35,17 +55,42 @@ async function processTranscription(transcriptId, audioBuffer) {
     transcript.completedAt = new Date();
     await transcript.save();
 
-    if (insights.reminders) {
+    // Save reminders
+    if (insights.reminders && insights.reminders.length > 0) {
       await saveReminders(insights.reminders, transcript);
+      
+      // Emit reminders created event
+      emitToUser(clerkId, 'reminders:created', {
+        transcriptId: transcript._id,
+        count: insights.reminders.length
+      });
     }
 
-    logger.info(`Completed: ${transcriptId}`);
+    // Emit completion
+    emitToUser(clerkId, 'transcription:complete', {
+      transcriptId: transcript._id,
+      status: 'completed',
+      insights: {
+        speakerCount: Object.keys(insights.speakers || {}).length,
+        reminderCount: insights.reminders?.length || 0
+      },
+      processingTimeMs: transcript.metadata.processingTimeMs
+    });
+
+    logger.info(`✓ Completed: ${transcriptId} in ${transcript.metadata.processingTimeMs}ms`);
   } catch (error) {
     logger.error(`Failed: ${transcriptId}`, error);
     
     transcript.status = 'failed';
-    transcript.error = { message: error.message };
+    transcript.error = { message: error.message, code: error.code };
     await transcript.save();
+
+    // Emit error
+    emitToUser(clerkId, 'transcription:error', {
+      transcriptId: transcript._id,
+      status: 'failed',
+      error: error.message
+    });
     
     throw error;
   }
@@ -73,14 +118,12 @@ async function saveReminders(reminders, transcript) {
   const validPriorities = ['high', 'normal', 'low'];
   
   const reminderDocs = reminders.map(reminder => {
-    
     let category = (reminder.category || 'task').toLowerCase();
     if (!validCategories.includes(category)) {
       logger.warn(`Invalid category "${category}" replaced with "task"`);
       category = 'task';
     }
 
-    
     let priority = (reminder.priority || 'normal').toLowerCase();
     if (priority === 'medium') {
       priority = 'normal';
@@ -106,7 +149,17 @@ async function saveReminders(reminders, transcript) {
 
   if (reminderDocs.length > 0) {
     await Reminder.insertMany(reminderDocs);
-    logger.info(`Saved ${reminderDocs.length} reminders`);
+    logger.info(`✓ Saved ${reminderDocs.length} reminders`);
+  }
+}
+
+
+function emitToUser(clerkId, event, data) {
+  if (global.io) {
+    global.io.to(`user:${clerkId}`).emit(event, data);
+    logger.info(`Socket emit to user:${clerkId} - ${event}`);
+  } else {
+    logger.warn('Socket.io not initialized');
   }
 }
 

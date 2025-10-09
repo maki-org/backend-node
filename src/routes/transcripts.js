@@ -31,45 +31,38 @@ const upload = multer({
       return cb(new Error(`Invalid file extension: ${ext}`));
     }
     
-    
     console.log('Accepted file');
     cb(null, true);
   }
 });
 
-
-router.post('/test-upload',
+// MAIN AUTHENTICATED TRANSCRIBE ENDPOINT (matches frontend /transcribe/)
+router.post('/',
+  requireAuth,
+  ensureUser,
   transcriptionLimiter,
-  upload.single('audio'),
+  upload.single('file'),
   asyncHandler(async (req, res) => {
     if (!req.file) {
-      return res.status(400).json({ error: 'No audio file' });
+      return res.status(400).json({ error: 'No audio file provided' });
     }
 
-    const User = require('../models/User');
-    let testUser = await User.findOne({ email: 'test@local.dev' });
-    
-    if (!testUser) {
-      testUser = await User.create({
-        clerkId: 'test_local_user',
-        email: 'test@local.dev',
-        name: 'Test User'
-      });
-    }
+    const { num_speakers = 2 } = req.body;
 
-    const { expectedSpeakers = 2, meetingTitle } = req.body;
+    logger.info(`Transcription request from user: ${req.user.email}, clerk: ${req.user.clerkId}`);
 
+    // Create transcript record linked to authenticated user
     const transcript = await Transcript.create({
-      userId: testUser._id,
-      clerkId: testUser.clerkId,
+      userId: req.user._id,
+      clerkId: req.user.clerkId,
       status: 'pending',
       metadata: {
-        expectedSpeakers: parseInt(expectedSpeakers),
-        meetingTitle: meetingTitle || 'Test Meeting'
+        expectedSpeakers: parseInt(num_speakers),
+        meetingTitle: `Recording ${new Date().toISOString()}`
       }
     });
 
-   
+    // Start background processing
     setImmediate(() => {
       processTranscription(transcript._id, req.file.buffer).catch(err => {
         logger.error('Background processing failed:', err);
@@ -77,12 +70,13 @@ router.post('/test-upload',
     });
 
     res.status(202).json({
-      id: transcript._id,
+      transcript_id: transcript._id,
       status: 'pending',
-      message: 'Processing started'
+      message: 'Transcription started'
     });
   })
 );
+
 
 router.get('/',
   requireAuth,
@@ -114,6 +108,7 @@ router.get('/',
     });
   })
 );
+
 
 router.get('/:id',
   requireAuth,
