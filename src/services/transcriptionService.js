@@ -1,7 +1,3 @@
-const path = require('path');
-const fs = require('fs').promises;
-const crypto = require('crypto');
-const { convertToWav } = require('./audioProcessor');
 const { transcribeAudio, extractInsights } = require('./groqService');
 const { parseDateTimeFromText } = require('./dateParser');
 const Transcript = require('../models/Transcript');
@@ -13,16 +9,20 @@ async function processTranscription(transcriptId, audioBuffer) {
   if (!transcript) throw new Error('Transcript not found');
 
   const startTime = Date.now();
-  const tempWavPath = `/tmp/${crypto.randomBytes(8).toString('hex')}.wav`;
 
   try {
     transcript.status = 'processing';
     await transcript.save();
 
-    await convertToWav(audioBuffer, tempWavPath);
-
-    const segments = await transcribeAudio(tempWavPath, transcript.metadata.expectedSpeakers);
-    await fs.unlink(tempWavPath);
+    
+    const segments = await transcribeAudio(
+      audioBuffer, 
+      transcript.metadata.expectedSpeakers
+    );
+    
+    
+    audioBuffer = null;
+    if (global.gc) global.gc();
 
     const fullText = segments.map(s => s.text).join(' ');
     const speakers = groupBySpeaker(segments);
@@ -48,7 +48,7 @@ async function processTranscription(transcriptId, audioBuffer) {
     transcript.error = { message: error.message };
     await transcript.save();
     
-    try { await fs.unlink(tempWavPath); } catch {}
+    throw error;
   }
 }
 
