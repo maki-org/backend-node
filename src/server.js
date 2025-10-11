@@ -1,93 +1,116 @@
-const express = require('express');
-const http = require('http');
-const cors = require('cors');
-const helmet = require('helmet');
-const morgan = require('morgan');
-const { clerkAuth } = require('./middleware/auth');
-require('dotenv').config();
+import express from 'express';
+import helmet from 'helmet';
+import cors from 'cors';
+import compression from 'compression';
+import mongoSanitize from 'express-mongo-sanitize';
+import dotenv from 'dotenv';
+import { clerkMiddleware } from '@clerk/express';
+import connectDB from './config/database.js';
+import initializeGroq from './config/groq.js';
+import logger from './utils/logger.js';
+import { errorHandler, notFound } from './middleware/errorHandler.js';
+import { generalLimiter } from './middleware/rateLimiter.js';
+import { clerkWebhookHandler } from './middleware/auth.js';
 
-const { connectDatabase } = require('./config/database');
-const { initializeSocketServer } = require('./sockets/transcriptionSocket');
-const errorHandler = require('./middleware/errorHandler');
-const { apiLimiter } = require('./middleware/rateLimiter');
-const { logger } = require('./utils/logger');
+import healthRoutes from './routes/health.js';
+import transcriptRoutes from './routes/transcripts.js';
+import reminderRoutes from './routes/reminders.js';
+import taskRoutes from './routes/tasks.js';
 
-const healthRoutes = require('./routes/health');
-const transcriptsRoutes = require('./routes/transcripts');
-const remindersRoutes = require('./routes/reminders');
+dotenv.config();
 
 const app = express();
-const server = http.createServer(app);
+const PORT = process.env.PORT || 8000;
 
-app.use(helmet());
+app.set('trust proxy', 1);
 
-app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || 'http://localhost:8080',
-    'http://localhost:5173',
-    'http://localhost:8080'
-  ],
-  credentials: true
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" },
 }));
 
-app.use(morgan('combined', {
-  stream: { write: message => logger.info(message.trim()) }
-}));
+const corsOptions = {
+  origin: process.env.CORS_ORIGIN?.split(','),
+  credentials: true,
+  optionsSuccessStatus: 200,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+};
+
+app.use(cors(corsOptions));
+app.use(compression());
+
+app.post('/webhooks/clerk', 
+  express.json({ 
+    verify: (req, res, buf) => {
+      req.rawBody = buf.toString();
+    }
+  }), 
+  clerkWebhookHandler
+);
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(mongoSanitize());
 
-app.use(clerkAuth);
+app.use(clerkMiddleware());
+
+app.use(generalLimiter);
 
 app.use('/health', healthRoutes);
-app.use('/api/transcripts', apiLimiter, transcriptsRoutes);
-app.use('/api/reminders', apiLimiter, remindersRoutes);
+app.use('/transcribe', transcriptRoutes);
+app.use('/reminders', reminderRoutes);
+app.use('/tasks', taskRoutes);
 
 app.get('/', (req, res) => {
   res.json({
-    service: 'Maki AI Backend',
-    version: '2.0.0',
-    status: 'running'
+    message: 'Maki AI Backend API',
+    version: '1.0.0',
+    status: 'operational',
+    timestamp: new Date(),
   });
 });
 
-app.use((req, res) => {
-  res.status(404).json({
-    error: 'Not Found',
-    path: req.path
-  });
-});
-
+app.use(notFound);
 app.use(errorHandler);
 
-async function startServer() {
+const startServer = async () => {
   try {
-    await connectDatabase();
-    logger.info('✓ Database connected');
+    await connectDB();
+    
+    initializeGroq();
 
-    const io = initializeSocketServer(server);
-    global.io = io;
-    logger.info('✓ WebSocket initialized');
+    if (!process.env.CLERK_WEBHOOK_SECRET && process.env.NODE_ENV === 'production') {
+      logger.warn('CLERK_WEBHOOK_SECRET not set - webhooks will not work in production');
+    }
 
-    const PORT = process.env.PORT || 8000;
-    server.listen(PORT, '0.0.0.0', () => {
-      logger.info(`✓ Server running on port ${PORT}`);
-      logger.info(`✓ Environment: ${process.env.NODE_ENV}`);
+    app.listen(PORT, '0.0.0.0', () => {
+      logger.info(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+      logger.info(`CORS enabled for: ${process.env.CORS_ORIGIN}`);
+      logger.info(`Webhook endpoint: /webhooks/clerk`);
     });
   } catch (error) {
-    logger.error('Startup failed:', error);
+    logger.error(`Failed to start server: ${error.message}`);
     process.exit(1);
   }
-}
+};
 
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM received');
-  server.close(() => process.exit(0));
+process.on('unhandledRejection', (err) => {
+  logger.error(`Unhandled Rejection: ${err.message}`);
+  process.exit(1);
 });
 
-process.on('SIGINT', () => {
-  logger.info('SIGINT received');
-  server.close(() => process.exit(0));
+process.on('uncaughtException', (err) => {
+  logger.error(`Uncaught Exception: ${err.message}`);
+  process.exit(1);
 });
 
 startServer();

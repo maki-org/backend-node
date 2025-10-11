@@ -1,21 +1,31 @@
-const Groq = require('groq-sdk');
-const { logger } = require('../utils/logger');
+import Groq from 'groq-sdk';
+import logger from '../utils/logger.js';
 
 let groqClient = null;
 
-function getGroqClient() {
-  if (!groqClient) {
-    const apiKey = process.env.GROQ_API_KEY;
-    
-    if (!apiKey) {
-      throw new Error('GROQ_API_KEY not configured');
+const initializeGroq = () => {
+  try {
+    if (!process.env.GROQ_API_KEY) {
+      throw new Error('GROQ_API_KEY not found in environment');
     }
 
-    groqClient = new Groq({ apiKey });
-    logger.info('Groq client initialized');
+    groqClient = new Groq({
+      apiKey: process.env.GROQ_API_KEY,
+    });
+
+    logger.info('Groq client initialized successfully');
+    return groqClient;
+  } catch (error) {
+    logger.error(`Groq initialization failed: ${error.message}`);
+    throw error;
   }
+};
 
+export const getGroqClient = () => {
+  if (!groqClient) {
+    return initializeGroq();
+  }
   return groqClient;
-}
+};
 
-module.exports = { getGroqClient };
+export default initializeGroq;

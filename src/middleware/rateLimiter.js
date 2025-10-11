@@ -1,19 +1,25 @@
-const rateLimit = require('express-rate-limit');
+import rateLimit from 'express-rate-limit';
+import logger from '../utils/logger.js';
 
-const transcriptionLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { error: 'Too many transcription requests. Try again in 15 minutes.' },
+export const transcriptionLimiter = rateLimit({
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW) || 900000,
+  max: parseInt(process.env.RATE_LIMIT_MAX) || 50,
+  message: 'Too many transcription requests, please try again later',
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  handler: (req, res) => {
+    logger.warn(`Rate limit exceeded for user: ${req.auth?.userId}`);
+    res.status(429).json({
+      error: 'Too many requests, please try again later'
+    });
+  },
+  skip: (req) => process.env.NODE_ENV === 'development'
 });
 
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+export const generalLimiter = rateLimit({
+  windowMs: 60000,
   max: 100,
-  message: { error: 'Too many requests. Try again in 15 minutes.' },
+  message: 'Too many requests from this IP',
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
 });
-
-module.exports = { transcriptionLimiter, apiLimiter };

@@ -1,39 +1,32 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 const userSchema = new mongoose.Schema({
   clerkId: {
     type: String,
     required: true,
     unique: true,
-    index: true
+    index: true,
   },
   email: {
     type: String,
     required: true,
     lowercase: true,
     trim: true,
-    index: true
   },
-  name: String,
-  
-  usage: {
-    transcriptionsCount: { type: Number, default: 0 },
-    totalMinutesProcessed: { type: Number, default: 0 },
-    lastTranscriptionAt: Date
+  firstName: String,
+  lastName: String,
+  createdAt: {
+    type: Date,
+    default: Date.now,
   },
-  
-  subscription: {
-    plan: {
-      type: String,
-      enum: ['free', 'pro', 'enterprise'],
-      default: 'free'
-    },
-    status: {
-      type: String,
-      enum: ['active', 'cancelled', 'past_due'],
-      default: 'active'
-    }
-  }
-}, { timestamps: true });
+  lastActive: {
+    type: Date,
+    default: Date.now,
+  },
+}, {
+  timestamps: true,
+});
 
-module.exports = mongoose.model('User', userSchema);
+userSchema.index({ createdAt: -1 });
+
+export default mongoose.model('User', userSchema);

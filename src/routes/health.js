@@ -1,19 +1,17 @@
-const express = require('express');
-const mongoose = require('mongoose');
+import express from 'express';
+import mongoose from 'mongoose';
 
 const router = express.Router();
 
 router.get('/', (req, res) => {
-  const health = {
-    status: 'ok',
-    timestamp: new Date().toISOString(),
+  const healthcheck = {
     uptime: process.uptime(),
-    environment: process.env.NODE_ENV,
-    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    message: 'OK',
+    timestamp: Date.now(),
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
   };
 
-  const statusCode = health.database === 'connected' ? 200 : 503;
-  res.status(statusCode).json(health);
+  res.status(200).json(healthcheck);
 });
 
-module.exports = router;
+export default router;

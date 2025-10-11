@@ -1,60 +1,37 @@
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 const transcriptSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true,
-    index: true
+    index: true,
   },
-  clerkId: {
+  filename: {
     type: String,
     required: true,
-    index: true
   },
-  
-  status: {
-    type: String,
-    enum: ['pending', 'processing', 'completed', 'failed'],
-    default: 'pending',
-    index: true
+  numSpeakers: {
+    type: Number,
+    default: 2,
   },
-  
-  
   transcript: {
-    fullText: String,
-    speakers: [{
-      label: String,
-      segments: [{
-        text: String,
-        start: Number,
-        end: Number
-      }],
-      totalSpeakingTime: Number
-    }]
+    type: String,
+    required: true,
   },
-  
   insights: {
-    speakers: mongoose.Schema.Types.Mixed,
-    overallSummary: String
+    type: Map,
+    of: mongoose.Schema.Types.Mixed,
   },
-  
-  metadata: {
-    meetingTitle: String,
-    expectedSpeakers: Number,
-    processingTimeMs: Number
+  createdAt: {
+    type: Date,
+    default: Date.now,
+    index: true,
   },
-  
-  error: {
-    message: String,
-    code: String
-  },
-  
-  completedAt: Date
-}, { timestamps: true });
+}, {
+  timestamps: true,
+});
 
 transcriptSchema.index({ userId: 1, createdAt: -1 });
-transcriptSchema.index({ userId: 1, status: 1 });
-transcriptSchema.index({ clerkId: 1, createdAt: -1 });
 
-module.exports = mongoose.model('Transcript', transcriptSchema);
+export default mongoose.model('Transcript', transcriptSchema);

@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-const reminderSchema = new mongoose.Schema({
+const taskSchema = new mongoose.Schema({
   transcriptId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Transcript',
@@ -49,7 +49,6 @@ const reminderSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-reminderSchema.index({ userId: 1, completed: 1, dueDate: 1 });
-reminderSchema.index({ userId: 1, createdAt: -1 });
+taskSchema.index({ userId: 1, completed: 1, dueDate: 1 });
 
-export default mongoose.model('Reminder', reminderSchema);
+export default mongoose.model('Task', taskSchema);

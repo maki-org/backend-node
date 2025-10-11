@@ -1,22 +1,27 @@
-const winston = require('winston');
+import winston from 'winston';
 
 const logger = winston.createLogger({
-  level: process.env.LOG_LEVEL || 'info',
+  level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
   format: winston.format.combine(
-    winston.format.timestamp(),
+    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
     winston.format.errors({ stack: true }),
+    winston.format.splat(),
     winston.format.json()
   ),
+  defaultMeta: { service: 'maki-ai' },
   transports: [
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.printf(({ timestamp, level, message, stack }) => {
-          return `${timestamp} ${level}: ${message}${stack ? '\n' + stack : ''}`;
-        })
-      )
-    })
-  ]
+    new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'logs/combined.log' }),
+  ],
 });
 
-module.exports = { logger };
+if (process.env.NODE_ENV !== 'production') {
+  logger.add(new winston.transports.Console({
+    format: winston.format.combine(
+      winston.format.colorize(),
+      winston.format.simple()
+    )
+  }));
+}
+
+export default logger;

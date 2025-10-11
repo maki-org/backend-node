@@ -1,133 +1,127 @@
-const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const { requireAuth, ensureUser } = require('../middleware/auth');
-const { transcriptionLimiter } = require('../middleware/rateLimiter');
-const asyncHandler = require('../utils/asyncHandler');
-const Transcript = require('../models/Transcript');
-const { processTranscription } = require('../services/transcriptionService');
-const { logger } = require('../utils/logger');
+import express from 'express';
+import multer from 'multer';
+import { authenticateUser, syncUserToDatabase } from '../middleware/auth.js';
+import { transcriptionLimiter } from '../middleware/rateLimiter.js';
+import { transcribeAudio, assignSpeakers, formatTranscript } from '../services/transcriptionService.js';
+import { extractInsights } from '../services/groqService.js';
+import { parseDateTimeFromText } from '../services/dateParser.js';
+import Transcript from '../models/Transcript.js';
+import Reminder from '../models/Reminder.js';
+import Task from '../models/Task.js';
+import logger from '../utils/logger.js';
 
 const router = express.Router();
 
+const storage = multer.memoryStorage();
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { 
-    fileSize: 100 * 1024 * 1024,
-    files: 1
+  storage,
+  limits: {
+    fileSize: parseInt(process.env.MAX_FILE_SIZE) || 52428800,
   },
   fileFilter: (req, file, cb) => {
-    console.log('File upload attempt:', {
-      originalname: file.originalname,
-      mimetype: file.mimetype,
-      fieldname: file.fieldname
-    });
-
-    const allowedExts = ['.mp3', '.wav', '.m4a', '.webm', '.ogg', '.mp4'];
-    const ext = path.extname(file.originalname).toLowerCase();
-    
-    if (!allowedExts.includes(ext)) {
-      console.log('Rejected: invalid extension', ext);
-      return cb(new Error(`Invalid file extension: ${ext}`));
+    const allowedTypes = ['audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/wav', 'audio/ogg'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only audio files are allowed.'));
     }
-    
-    console.log('Accepted file');
-    cb(null, true);
+  },
+});
+
+router.post(
+  '/',
+  authenticateUser,
+  syncUserToDatabase,
+  transcriptionLimiter,
+  upload.single('file'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No audio file provided' });
+      }
+
+      const numSpeakers = parseInt(req.body.num_speakers) || 2;
+      logger.info(`Processing transcription for user: ${req.user._id}, file: ${req.file.originalname}`);
+
+      const transcriptionResult = await transcribeAudio(req.file.buffer, req.file.originalname);
+      
+      let segments = transcriptionResult.segments || [];
+      segments = assignSpeakers(segments, numSpeakers);
+
+      const finalTranscript = formatTranscript(segments);
+
+      const insights = await extractInsights(finalTranscript);
+
+      const transcript = await Transcript.create({
+        userId: req.user._id,
+        filename: req.file.originalname,
+        numSpeakers: insights.detected_speakers || numSpeakers,
+        transcript: finalTranscript,
+        insights: insights.speakers || {},
+      });
+
+      if (insights.reminders && insights.reminders.length > 0) {
+        const reminderDocs = insights.reminders.map((reminder) => ({
+          transcriptId: transcript._id,
+          userId: req.user._id,
+          filename: req.file.originalname,
+          title: reminder.title,
+          from: reminder.from,
+          dueDate: reminder.due_date_text ? parseDateTimeFromText(reminder.due_date_text) : null,
+          dueDateText: reminder.due_date_text,
+          priority: reminder.priority,
+          category: reminder.category,
+          extractedFrom: reminder.extracted_from,
+          completed: false,
+        }));
+
+        await Reminder.insertMany(reminderDocs);
+        await Task.insertMany(reminderDocs);
+
+        logger.info(`Created ${reminderDocs.length} reminders for user: ${req.user._id}`);
+      }
+
+      res.status(200).json({
+        transcript: finalTranscript,
+        insights: insights.speakers || {},
+        reminders: insights.reminders || [],
+        detected_speakers: insights.detected_speakers,
+      });
+
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get('/', authenticateUser, syncUserToDatabase, async (req, res, next) => {
+  try {
+    const transcripts = await Transcript.find({ userId: req.user._id })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .select('-insights');
+
+    res.status(200).json(transcripts);
+  } catch (error) {
+    next(error);
   }
 });
 
-// MAIN AUTHENTICATED TRANSCRIBE ENDPOINT (matches frontend /transcribe/)
-router.post('/',
-  requireAuth,
-  ensureUser,
-  transcriptionLimiter,
-  upload.single('file'),
-  asyncHandler(async (req, res) => {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No audio file provided' });
-    }
-
-    const { num_speakers = 2 } = req.body;
-
-    logger.info(`Transcription request from user: ${req.user.email}, clerk: ${req.user.clerkId}`);
-
-    // Create transcript record linked to authenticated user
-    const transcript = await Transcript.create({
+router.get('/:id', authenticateUser, syncUserToDatabase, async (req, res, next) => {
+  try {
+    const transcript = await Transcript.findOne({
+      _id: req.params.id,
       userId: req.user._id,
-      clerkId: req.user.clerkId,
-      status: 'pending',
-      metadata: {
-        expectedSpeakers: parseInt(num_speakers),
-        meetingTitle: `Recording ${new Date().toISOString()}`
-      }
     });
-
-    // Start background processing
-    setImmediate(() => {
-      processTranscription(transcript._id, req.file.buffer).catch(err => {
-        logger.error('Background processing failed:', err);
-      });
-    });
-
-    res.status(202).json({
-      transcript_id: transcript._id,
-      status: 'pending',
-      message: 'Transcription started'
-    });
-  })
-);
-
-
-router.get('/',
-  requireAuth,
-  ensureUser,
-  asyncHandler(async (req, res) => {
-    const { status, limit = 50, skip = 0 } = req.query;
-
-    const query = { userId: req.user._id };
-    if (status) query.status = status;
-
-    const transcripts = await Transcript
-      .find(query)
-      .select('-audio.filename')
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
-      .skip(parseInt(skip))
-      .lean();
-
-    const total = await Transcript.countDocuments(query);
-
-    res.json({
-      transcripts,
-      pagination: {
-        total,
-        limit: parseInt(limit),
-        skip: parseInt(skip),
-        hasMore: total > parseInt(skip) + transcripts.length
-      }
-    });
-  })
-);
-
-
-router.get('/:id',
-  requireAuth,
-  ensureUser,
-  asyncHandler(async (req, res) => {
-    const transcript = await Transcript
-      .findOne({
-        _id: req.params.id,
-        userId: req.user._id
-      })
-      .select('-audio.filename')
-      .lean();
 
     if (!transcript) {
       return res.status(404).json({ error: 'Transcript not found' });
     }
 
-    res.json(transcript);
-  })
-);
+    res.status(200).json(transcript);
+  } catch (error) {
+    next(error);
+  }
+});
 
-module.exports = router;
+export default router;

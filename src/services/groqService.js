@@ -1,124 +1,76 @@
-const { getGroqClient } = require('../config/groq');
-const { logger } = require('../utils/logger');
-const fs = require('fs');
-const path = require('path');
-const { promisify } = require('util');
-const writeFile = promisify(fs.writeFile);
-const unlink = promisify(fs.unlink);
+import { getGroqClient } from '../config/groq.js';
+import logger from '../utils/logger.js';
 
-async function transcribeAudio(audioBuffer, numSpeakers = 2) {
-  const client = getGroqClient();
-  const tempFile = path.join('/tmp', `audio-${Date.now()}.mp3`);
-  
+export const extractInsights = async (transcript) => {
   try {
-    logger.info(`Processing ${audioBuffer.length} bytes...`);
-    
-    // Write buffer to temp file (Groq SDK needs a file path)
-    await writeFile(tempFile, audioBuffer);
-    
-    // Create read stream for Groq
-    const audioStream = fs.createReadStream(tempFile);
-    
-    const transcription = await client.audio.transcriptions.create({
-      file: audioStream,
-      model: 'whisper-large-v3',
-      response_format: 'verbose_json',
-      language: 'en'
-    });
+    const groq = getGroqClient();
 
-    // Clean up temp file
-    await unlink(tempFile);
-
-    const segments = transcription.segments || [];
-    
-    // Simple speaker diarization
-    segments.forEach((segment, index) => {
-      segment.speaker = `SPEAKER ${(index % numSpeakers) + 1}`;
-    });
-
-    logger.info(`✓ Transcribed ${segments.length} segments`);
-    return segments;
-  } catch (error) {
-    // Clean up on error
-    try { await unlink(tempFile); } catch {}
-    
-    logger.error('Groq transcription failed:', error);
-    throw new Error(`Transcription failed: ${error.message}`);
-  }
-}
-
-
-async function extractInsights(fullTranscript, speakers) {
-  const client = getGroqClient();
-  
-  const maxLength = 15000;
-  const truncatedTranscript = fullTranscript.length > maxLength 
-    ? fullTranscript.substring(0, maxLength) + '...[truncated]'
-    : fullTranscript;
-
-  const speakerContext = speakers.map(s => 
-    `${s.label}: ${s.segments.slice(0, 3).map(seg => seg.text).join(' ')}`
-  ).join('\n');
-
-const prompt = `Analyze this meeting transcript and extract insights PER SPEAKER.
+    const prompt = `Analyze the following transcript and extract insights.
 
 Transcript:
-${truncatedTranscript}
+${transcript}
 
-Speakers:
-${speakerContext}
+Extract the following information:
+1. Number of speakers detected in the conversation (analyze speech patterns, topics discussed, and conversation flow to determine the actual number of unique speakers)
+2. Action items for each speaker
+3. Key information shared by each speaker
+4. Any reminders or time-sensitive tasks mentioned
 
-Extract:
-1. Action items per speaker
-2. Key information per speaker  
-3. Reminders with exact deadline phrasing
+For speaker detection:
+- Analyze conversation patterns, topic changes, and speaking styles
+- Return the detected speaker count as "detected_speakers": number
+- If you detect N speakers, structure insights for SPEAKER 1 through SPEAKER N
 
-IMPORTANT RULES:
-- priority must be ONLY: "high", "normal", or "low" (NOT "medium")
-- category must be ONLY: "meeting", "call", "task", "deadline", "personal", "email", "followup"
+For reminders, extract:
+- title: Brief description of what needs to be done
+- from: Which speaker mentioned it
+- due_date_text: EXACTLY what was said about when (e.g., "tomorrow at 2pm", "next Friday", "by end of week"). If NO specific time/date is mentioned, set this to null
+- priority: "high", "normal", or "low" based on urgency
+- category: "meeting", "call", "task", "deadline", or "personal"
+- extracted_from: The exact phrase from the transcript
 
-Return ONLY valid JSON:
+Return ONLY a valid JSON object with this exact structure:
 {
-  "speakers": {
-    "SPEAKER 1": {
-      "action_items": ["item1", "item2"],
-      "key_information": ["info1", "info2"]
+    "detected_speakers": number,
+    "speakers": {
+        "SPEAKER 1": {
+            "action_items": ["list of action items"],
+            "key_information": ["list of key points"]
+        },
+        "SPEAKER 2": {
+            "action_items": ["list of action items"],
+            "key_information": ["list of key points"]
+        }
     },
-    "SPEAKER 2": {
-      "action_items": [],
-      "key_information": []
-    }
-  },
-  "reminders": [
-    {
-      "title": "Call John about project",
-      "from": "SPEAKER 1",
-      "due_date_text": "tomorrow at 2pm",
-      "priority": "high",
-      "category": "call",
-      "extracted_from": "I need to call John tomorrow at 2pm"
-    }
-  ]
-}`;
+    "reminders": [
+        {
+            "title": "string",
+            "from": "string",
+            "due_date_text": "string or null if no date mentioned",
+            "priority": "high/normal/low",
+            "category": "meeting/call/task/deadline/personal",
+            "extracted_from": "original text"
+        }
+    ]
+}
 
-  try {
-    logger.info('Extracting insights...');
-    
-    const response = await client.chat.completions.create({
+Important: Only include reminders that have clear action items. Set due_date_text to null if no specific time is mentioned.`;
+
+    logger.info('Extracting insights from transcript');
+
+    const response = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3,
-      response_format: { type: 'json_object' }
+      response_format: { type: 'json_object' },
     });
 
     const insights = JSON.parse(response.choices[0].message.content);
-    logger.info(`✓ Extracted ${insights.reminders?.length || 0} reminders`);
-    
+    logger.info('Insights extracted successfully');
+
     return insights;
   } catch (error) {
-    logger.error('Insights extraction failed:', error);
-    return { speakers: {}, reminders: [] };
+    logger.error(`Insight extraction error: ${error.message}`);
+    throw new Error(`Insight extraction failed: ${error.message}`);
   }
-}
-
-module.exports = { transcribeAudio, extractInsights };
+};
