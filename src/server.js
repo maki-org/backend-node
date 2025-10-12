@@ -65,11 +65,6 @@ app.use(clerkMiddleware());
 
 app.use(generalLimiter);
 
-app.use('/health', healthRoutes);
-app.use('/transcribe', transcriptRoutes);
-app.use('/reminders', reminderRoutes);
-app.use('/tasks', taskRoutes);
-
 app.get('/', (req, res) => {
   res.json({
     message: 'Maki AI Backend API',
@@ -78,6 +73,15 @@ app.get('/', (req, res) => {
     timestamp: new Date(),
   });
 });
+
+const apiV1Router = express.Router();
+
+apiV1Router.use('/health', healthRoutes);
+apiV1Router.use('/transcribe', transcriptRoutes);
+apiV1Router.use('/reminders', reminderRoutes);
+apiV1Router.use('/tasks', taskRoutes);
+
+app.use('/api/v1', apiV1Router);
 
 app.use(notFound);
 app.use(errorHandler);
