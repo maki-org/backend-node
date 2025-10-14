@@ -25,7 +25,7 @@ jobs:
             --exclude 'README.md' \
             --exclude '.github' \
             --exclude 'logs' \
-            ./ /home/azureuser/server
+            ./ /var/www/maki-backend/
       - name: Install dependencies in app directory
         working-directory: /var/www/maki-backend
         run: npm ci

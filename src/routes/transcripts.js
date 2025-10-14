@@ -60,26 +60,59 @@ router.post(
         insights: insights.speakers || {},
       });
 
-      if (insights.reminders && insights.reminders.length > 0) {
-        const reminderDocs = insights.reminders.map((reminder) => ({
-          transcriptId: transcript._id,
-          userId: req.user._id,
-          filename: req.file.originalname,
-          title: reminder.title,
-          from: reminder.from,
-          dueDate: reminder.due_date_text ? parseDateTimeFromText(reminder.due_date_text) : null,
-          dueDateText: reminder.due_date_text,
-          priority: reminder.priority,
-          category: reminder.category,
-          extractedFrom: reminder.extracted_from,
-          completed: false,
-        }));
-
-        await Reminder.insertMany(reminderDocs);
-        await Task.insertMany(reminderDocs);
-
-        logger.info(`Created ${reminderDocs.length} reminders for user: ${req.user._id}`);
-      }
+     if (insights.reminders && insights.reminders.length > 0) {
+          
+          const taskCategories = ['task', 'deadline'];
+          const reminderCategories = ['meeting', 'call', 'personal'];
+          
+          const tasks = insights.reminders.filter(item => 
+            taskCategories.includes(item.category)
+          );
+          
+          const reminders = insights.reminders.filter(item => 
+            reminderCategories.includes(item.category)
+          );
+          
+          
+          if (tasks.length > 0) {
+            const taskDocs = tasks.map((task) => ({
+              transcriptId: transcript._id,
+              userId: req.user._id,
+              filename: req.file.originalname,
+              title: task.title,
+              from: task.from,
+              dueDate: task.due_date_text ? parseDateTimeFromText(task.due_date_text) : null,
+              dueDateText: task.due_date_text,
+              priority: task.priority,
+              category: task.category,
+              extractedFrom: task.extracted_from,
+              completed: false,
+            }));
+            
+            await Task.insertMany(taskDocs);
+            logger.info(`Created ${taskDocs.length} tasks for user: ${req.user._id}`);
+          }
+          
+          
+          if (reminders.length > 0) {
+            const reminderDocs = reminders.map((reminder) => ({
+              transcriptId: transcript._id,
+              userId: req.user._id,
+              filename: req.file.originalname,
+              title: reminder.title,
+              from: reminder.from,
+              dueDate: reminder.due_date_text ? parseDateTimeFromText(reminder.due_date_text) : null,
+              dueDateText: reminder.due_date_text,
+              priority: reminder.priority,
+              category: reminder.category,
+              extractedFrom: reminder.extracted_from,
+              completed: false,
+            }));
+            
+            await Reminder.insertMany(reminderDocs);
+            logger.info(`Created ${reminderDocs.length} reminders for user: ${req.user._id}`);
+          }
+        }
 
       res.status(200).json({
         transcript: finalTranscript,
