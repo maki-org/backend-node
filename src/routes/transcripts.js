@@ -3,7 +3,6 @@ import multer from 'multer';
 import { authenticateUser, syncUserToDatabase } from '../middleware/auth.js';
 import { transcriptionLimiter } from '../middleware/rateLimiter.js';
 import { transcribeAudio, assignSpeakers, formatTranscript } from '../services/transcriptionService.js';
-import { extractInsights } from '../services/groqService.js';
 import { parseDateTimeFromText } from '../services/dateParser.js';
 import Transcript from '../models/Transcript.js';
 import Reminder from '../models/Reminder.js';
@@ -27,14 +26,37 @@ function sanitizeMakiData(analysis) {
     if (Array.isArray(data)) return data;
     if (typeof data === 'string') {
       try {
-        // Handle single quotes from LLMs
-        const normalized = data.replace(/'/g, '"');
+        // Handle single quotes from LLMs - replace them with double quotes
+        // But preserve single quotes inside strings
+        let normalized = data.trim();
+        
+        // Remove outer quotes if present
+        if ((normalized.startsWith('"') && normalized.endsWith('"')) ||
+            (normalized.startsWith("'") && normalized.endsWith("'"))) {
+          normalized = normalized.slice(1, -1);
+        }
+        
+        // Replace single quotes with double quotes for JSON parsing
+        // This is a simple approach - for production, use a proper JSON5 parser
+        normalized = normalized
+          .replace(/'/g, '"')
+          .replace(/(\w+):/g, '"$1":'); // Add quotes to unquoted keys
+        
         return JSON.parse(normalized);
-      } catch {
-        // Try direct parsing if normalization fails
+      } catch (e1) {
+        // Try without normalization
         try {
           return JSON.parse(data);
-        } catch {
+        } catch (e2) {
+          // If both fail, try eval as last resort (safe in this controlled context)
+          try {
+            // Only use eval if it looks like valid JavaScript array/object
+            if (data.trim().startsWith('[') || data.trim().startsWith('{')) {
+              return eval('(' + data + ')');
+            }
+          } catch (e3) {
+            return fallback;
+          }
           return fallback;
         }
       }
@@ -50,6 +72,10 @@ function sanitizeMakiData(analysis) {
     if (typeof data === 'string') {
       const parsed = safelyParseJSON(data, null);
       if (Array.isArray(parsed)) return parsed;
+      // If it's still a string, try to split by common delimiters
+      if (typeof parsed === 'string') {
+        return [parsed]; // Wrap single string in array
+      }
     }
     return [data];
   };
@@ -100,6 +126,7 @@ function sanitizeMakiData(analysis) {
         // Now sanitize each date object
         speaker.profile.important_dates = dates.map(dateObj => {
           if (typeof dateObj === 'string') {
+            // If it's just a string, create minimal object
             return {
               date: dateObj,
               description: '',
@@ -114,7 +141,10 @@ function sanitizeMakiData(analysis) {
             description: ensureString(dateObj.description, ''),
             type: ensureString(dateObj.type, 'other')
           };
-        });
+        }).filter(dateObj => dateObj.date); // Remove empty dates
+      } else {
+        // Initialize as empty array if not present
+        speaker.profile.important_dates = [];
       }
 
       // Sanitize common_topics
@@ -130,7 +160,9 @@ function sanitizeMakiData(analysis) {
             topic: ensureString(topic.topic, ''),
             frequency: Number(topic.frequency) || 1
           };
-        });
+        }).filter(topic => topic.topic); // Remove empty topics
+      } else {
+        speaker.profile.common_topics = [];
       }
 
       return speaker;
@@ -139,7 +171,6 @@ function sanitizeMakiData(analysis) {
 
   return analysis;
 }
-
 
 
 const router = express.Router();
@@ -326,123 +357,132 @@ async function processMakiAnalysis(transcriptId, transcript, userId, accountName
       }));
     }
 
-    // Create conversation
-    const conversation = await Conversation.create(conversationData);
-    results.conversation = conversation;
-    logger.info(`Created conversation: ${conversation.title}`);
+    
+// Create conversation
+const conversation = await Conversation.create(conversationData);
+results.conversation = conversation;
+logger.info(`Created conversation: ${conversation.title}`);
 
-    // Extract and create Tasks and Reminders
-    if (analysis.reminders && analysis.reminders.length > 0) {
-      const taskCategories = ['task', 'deadline'];
-      const reminderCategories = ['meeting', 'call', 'personal'];
-      
-      const tasks = analysis.reminders.filter(item => 
-        taskCategories.includes(item.category)
-      );
-      
-      const reminders = analysis.reminders.filter(item => 
-        reminderCategories.includes(item.category)
-      );
-      
-      if (tasks.length > 0) {
-        const taskDocs = tasks.map((task) => ({
-          transcriptId: transcriptId,
-          userId: userId,
-          filename: conversation.title,
-          title: task.title,
-          from: task.from,
-          dueDate: task.due_date_text ? parseDateTimeFromText(task.due_date_text) : null,
-          dueDateText: task.due_date_text,
-          priority: task.priority,
-          category: task.category,
-          extractedFrom: task.extracted_from,
-          completed: false,
-        }));
-        
-        const createdTasks = await Task.insertMany(taskDocs);
-        results.tasks = createdTasks;
-        logger.info(`Created ${taskDocs.length} tasks`);
-      }
-      
-      if (reminders.length > 0) {
-        const reminderDocs = reminders.map((reminder) => ({
-          transcriptId: transcriptId,
-          userId: userId,
-          filename: conversation.title,
-          title: reminder.title,
-          from: reminder.from,
-          dueDate: reminder.due_date_text ? parseDateTimeFromText(reminder.due_date_text) : null,
-          dueDateText: reminder.due_date_text,
-          priority: reminder.priority,
-          category: reminder.category,
-          extractedFrom: reminder.extracted_from,
-          completed: false,
-        }));
-        
-        const createdReminders = await Reminder.insertMany(reminderDocs);
-        results.reminders = createdReminders;
-        logger.info(`Created ${reminderDocs.length} reminders`);
-      }
-    }
+//  EXTRACT TASKS DIRECTLY (no filtering)
+if (analysis.tasks && analysis.tasks.length > 0) {
+  const taskDocs = analysis.tasks.map((task) => ({
+    transcriptId: transcriptId,
+    userId: userId,
+    filename: conversation.title,
+    title: task.title,
+    from: task.from,
+    dueDate: task.due_date_text ? parseDateTimeFromText(task.due_date_text) : null,
+    dueDateText: task.due_date_text,
+    priority: task.priority || 'medium',
+    category: 'task', 
+    extractedFrom: task.extracted_from,
+    completed: false,
+  }));
+  
+  const createdTasks = await Task.insertMany(taskDocs);
+  results.tasks = createdTasks;
+  logger.info(`Created ${createdTasks.length} tasks`);
+}
 
-    // Create pending follow-ups
-    if (analysis.pending_followups && analysis.pending_followups.length > 0) {
-      const followUpDocs = [];
-      
-      for (const followup of analysis.pending_followups) {
-        const person = await Person.findOne({
-          userId,
-          name: { $regex: new RegExp(`^${followup.person}$`, 'i') },
-        });
-        
-        if (person) {
-          followUpDocs.push({
-            userId,
-            personId: person._id,
-            conversationId: conversation._id,
-            type: 'pending',
-            priority: followup.priority || 'medium',
-            context: followup.description,
-          });
-        }
-      }
-      
-      if (followUpDocs.length > 0) {
-        const createdFollowUps = await FollowUp.insertMany(followUpDocs);
-        results.followups = createdFollowUps;
-        logger.info(`Created ${followUpDocs.length} pending follow-ups`);
-      }
-    }
+//  EXTRACT REMINDERS DIRECTLY (no filtering)
+if (analysis.reminders && analysis.reminders.length > 0) {
+  const reminderDocs = analysis.reminders.map((reminder) => ({
+    transcriptId: transcriptId,
+    userId: userId,
+    filename: conversation.title,
+    title: reminder.title,
+    from: reminder.from,
+    dueDate: reminder.due_date_text ? parseDateTimeFromText(reminder.due_date_text) : null,
+    dueDateText: reminder.due_date_text,
+    priority: reminder.priority || 'medium',
+    category: reminder.category || 'meeting', // Use category from LLM
+    extractedFrom: reminder.extracted_from,
+    completed: false,
+  }));
+  
+  const createdReminders = await Reminder.insertMany(reminderDocs);
+  results.reminders = createdReminders;
+  logger.info(`Created ${createdReminders.length} reminders`);
+}
 
-    // Create suggested follow-ups
-    if (analysis.suggested_followups && analysis.suggested_followups.length > 0) {
-      const followUpDocs = [];
-      
-      for (const followup of analysis.suggested_followups) {
-        const person = await Person.findOne({
-          userId,
-          name: { $regex: new RegExp(`^${followup.person}$`, 'i') },
-        });
-        
-        if (person) {
-          followUpDocs.push({
-            userId,
-            personId: person._id,
-            conversationId: conversation._id,
-            type: 'suggested',
-            priority: followup.priority || 'medium',
-            context: followup.reason,
-            reason: followup.reason,
-          });
-        }
-      }
-      
-      if (followUpDocs.length > 0) {
-        const createdSuggested = await FollowUp.insertMany(followUpDocs);
-        results.followups.push(...createdSuggested);
-        logger.info(`Created ${followUpDocs.length} suggested follow-ups`);
-      }
+//  CREATE PENDING FOLLOW-UPS (with fallback person creation)
+if (analysis.pending_followups && analysis.pending_followups.length > 0) {
+  const followUpDocs = [];
+  
+  for (const followup of analysis.pending_followups) {
+    logger.info(`Processing followup for person: ${followup.person}`);
+    
+    let person = await Person.findOne({
+      userId,
+      name: { $regex: new RegExp(`^${followup.person}$`, 'i') },
+    });
+    
+    // Create person if not exists
+    if (!person) {
+      logger.info(`Creating new person for followup: ${followup.person}`);
+      person = await Person.create({
+        userId,
+        name: followup.person,
+        initials: followup.person.charAt(0).toUpperCase(),
+        relationship: { type: 'acquaintance' },
+        communication: {
+          frequency: 'rarely',
+          totalConversations: 0,
+          conversationCounter: 0,
+        },
+        sentiment: {
+          closenessScore: 0.5,
+          tone: 'neutral',
+        },
+      });
     }
+    
+    followUpDocs.push({
+      userId,
+      personId: person._id,
+      conversationId: conversation._id,
+      type: 'pending',
+      priority: followup.priority || 'medium',
+      context: followup.description,
+    });
+  }
+  
+  if (followUpDocs.length > 0) {
+    const createdFollowUps = await FollowUp.insertMany(followUpDocs);
+    results.followups = createdFollowUps;
+    logger.info(`Created ${followUpDocs.length} pending follow-ups`);
+  }
+}
+
+//  CREATE SUGGESTED FOLLOW-UPS
+if (analysis.suggested_followups && analysis.suggested_followups.length > 0) {
+  const followUpDocs = [];
+  
+  for (const followup of analysis.suggested_followups) {
+    let person = await Person.findOne({
+      userId,
+      name: { $regex: new RegExp(`^${followup.person}$`, 'i') },
+    });
+    
+    if (person) {
+      followUpDocs.push({
+        userId,
+        personId: person._id,
+        conversationId: conversation._id,
+        type: 'suggested',
+        priority: followup.priority || 'low',
+        context: followup.reason,
+        reason: followup.reason,
+      });
+    }
+  }
+  
+  if (followUpDocs.length > 0) {
+    const createdSuggestedFollowUps = await FollowUp.insertMany(followUpDocs);
+    results.followups = [...results.followups, ...createdSuggestedFollowUps];
+    logger.info(`Created ${followUpDocs.length} suggested follow-ups`);
+  }
+}
 
     // Process network connections
     if (analysis.network_connections && analysis.network_connections.length > 0) {
