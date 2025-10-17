@@ -148,11 +148,16 @@ Return ONLY valid JSON with this EXACT structure:
 
 CRITICAL RULES:
 1. Return ONLY the JSON object, no extra text
-2. All dates must be strings in ISO format (YYYY-MM-DD) or descriptive text
-3. important_dates must be array of objects with date/description/type as strings
-4. location must be array of strings
-5. All arrays must contain proper objects or strings, not stringified JSON
-6. Do not wrap JSON in code blocks or markdown`;
+2. All dates must be strings in ISO format (YYYY-MM-DD) or descriptive text like "Wednesday" or "December 15"
+3. important_dates MUST be an array of objects with this EXACT structure:
+   [
+     {"date": "2025-12-15", "description": "text", "type": "birthday"},
+     {"date": "Wednesday", "description": "text", "type": "deadline"}
+   ]
+4. location MUST be an array of strings: ["New York", "Tokyo"]
+5. ALL arrays must contain actual objects or strings, NOT stringified JSON
+6. Do NOT use single quotes in JSON - use double quotes only
+7. Do not wrap any values in extra quotes or stringify them`;
 
     logger.info('Starting MAKI conversation analysis');
 

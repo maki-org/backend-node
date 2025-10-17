@@ -23,12 +23,20 @@ function sanitizeMakiData(analysis) {
   // Helper to safely parse stringified JSON
   const safelyParseJSON = (data, fallback = null) => {
     if (!data) return fallback;
-    if (typeof data === 'object') return data;
+    if (typeof data === 'object' && !Array.isArray(data)) return data;
+    if (Array.isArray(data)) return data;
     if (typeof data === 'string') {
       try {
-        return JSON.parse(data);
+        // Handle single quotes from LLMs
+        const normalized = data.replace(/'/g, '"');
+        return JSON.parse(normalized);
       } catch {
-        return fallback;
+        // Try direct parsing if normalization fails
+        try {
+          return JSON.parse(data);
+        } catch {
+          return fallback;
+        }
       }
     }
     return fallback;
@@ -38,6 +46,11 @@ function sanitizeMakiData(analysis) {
   const ensureArray = (data, fallback = []) => {
     if (Array.isArray(data)) return data;
     if (!data) return fallback;
+    // Try parsing if it's a string
+    if (typeof data === 'string') {
+      const parsed = safelyParseJSON(data, null);
+      if (Array.isArray(parsed)) return parsed;
+    }
     return [data];
   };
 
@@ -76,16 +89,25 @@ function sanitizeMakiData(analysis) {
         }
       }
 
-      // Sanitize important_dates
+      // Sanitize important_dates - CRITICAL FIX
       if (speaker.profile.important_dates) {
-        const dates = safelyParseJSON(speaker.profile.important_dates, []);
-        speaker.profile.important_dates = ensureArray(dates).map(dateObj => {
+        // First parse if it's a stringified array
+        let dates = safelyParseJSON(speaker.profile.important_dates, []);
+        
+        // Ensure it's an array
+        dates = ensureArray(dates);
+        
+        // Now sanitize each date object
+        speaker.profile.important_dates = dates.map(dateObj => {
           if (typeof dateObj === 'string') {
             return {
               date: dateObj,
               description: '',
               type: 'other'
             };
+          }
+          if (typeof dateObj !== 'object' || dateObj === null) {
+            return { date: '', description: '', type: 'other' };
           }
           return {
             date: ensureString(dateObj.date, ''),
@@ -97,8 +119,10 @@ function sanitizeMakiData(analysis) {
 
       // Sanitize common_topics
       if (speaker.profile.common_topics) {
-        const topics = safelyParseJSON(speaker.profile.common_topics, []);
-        speaker.profile.common_topics = ensureArray(topics).map(topic => {
+        let topics = safelyParseJSON(speaker.profile.common_topics, []);
+        topics = ensureArray(topics);
+        
+        speaker.profile.common_topics = topics.map(topic => {
           if (typeof topic === 'string') {
             return { topic, frequency: 1 };
           }
@@ -108,40 +132,6 @@ function sanitizeMakiData(analysis) {
           };
         });
       }
-
-      if (speaker.profile.important_dates) {
-     // First, handle the case where the entire array is a string
-     let dates = speaker.profile.important_dates;
-     if (typeof dates === 'string') {
-       try {
-         // LLMs often use single quotes, which is invalid JSON. Replace them.
-         dates = JSON.parse(dates.replace(/'/g, '"'));
-       } catch {
-         // If parsing fails, default to an empty array to prevent crashes
-         dates = [];
-       }
-     }
-
-     // Now, ensure it's an array and map over it to clean each object
-     speaker.profile.important_dates = ensureArray(dates).map(dateObj => {
-       if (typeof dateObj === 'string') {
-         // Handle cases where an element is just a string
-         return {
-           date: dateObj,
-           description: '',
-           type: 'other'
-         };
-       }
-       if (typeof dateObj !== 'object' || dateObj === null) {
-         return { date: '', description: '', type: 'other' };
-       }
-       return {
-         date: ensureString(dateObj.date, ''),
-         description: ensureString(dateObj.description, ''),
-         type: ensureString(dateObj.type, 'other')
-       };
-     });
-   }
 
       return speaker;
     });
@@ -565,14 +555,20 @@ router.post(
         message: 'Audio processed successfully',
         transcript: finalTranscript,
         conversation: {
+          id: makiAnalysis?.conversation?._id,
           title: makiAnalysis?.conversation?.title,
           summary: makiAnalysis?.conversation?.summary,
-          participants: makiAnalysis?.participants?.length || 0,
+          participants: makiAnalysis?.conversation?.participants || [], // ✅ Correct path
         },
         extracted: {
           tasks: makiAnalysis?.tasks?.length || 0,
           reminders: makiAnalysis?.reminders?.length || 0,
-          people: makiAnalysis?.people?.length || 0,
+          people: makiAnalysis?.people?.map(person => ({
+            id: person._id,
+            name: person.name,
+            initials: person.initials,
+            relationship: person.relationship
+          })) || [], 
           followups: makiAnalysis?.followups?.length || 0,
         }
       });
