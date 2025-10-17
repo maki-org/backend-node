@@ -1,3 +1,4 @@
+// src/models/Person.js
 import mongoose from 'mongoose';
 
 const personSchema = new mongoose.Schema({
@@ -13,8 +14,8 @@ const personSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  initials: String,  // For UI display
-  avatar: String,    // URL or color code
+  initials: String,
+  avatar: String,
   
   // Relationship Info
   relationship: {
@@ -22,8 +23,8 @@ const personSchema = new mongoose.Schema({
       type: String,
       enum: ['friend', 'family', 'colleague', 'client', 'investor', 'mentor', 'acquaintance', 'other'],
     },
-    subtype: String,  // e.g., "brother", "sister", "manager", "CEO"
-    source: String,   // Where/how they met (workplace, school, event, etc.)
+    subtype: String,
+    source: String,
   },
   
   // Communication Tracking
@@ -60,7 +61,7 @@ const personSchema = new mongoose.Schema({
   
   // Personal Intelligence
   profile: {
-    summary: String,  // What we know about this person
+    summary: String,
     
     // Key Information
     keyInfo: {
@@ -82,7 +83,7 @@ const personSchema = new mongoose.Schema({
         relatives: [String],
         pets: [String],
         birthdate: String,
-        location: String,
+        location: [String],  // ✅ CHANGED FROM String TO [String]
       },
     },
     
@@ -94,9 +95,9 @@ const personSchema = new mongoose.Schema({
     
     // Important Dates
     importantDates: [{
-      date: Date,
+      date: String,
       description: String,
-      type: String,  // birthday, anniversary, etc.
+      type: String,
     }],
   },
   
@@ -107,7 +108,7 @@ const personSchema = new mongoose.Schema({
       ref: 'Person',
     },
     relationshipType: String,
-    strength: Number,  // 0-1, how closely connected
+    strength: Number,
   }],
   
   createdAt: {
