@@ -16,6 +16,12 @@ import healthRoutes from './routes/health.js';
 import transcriptRoutes from './routes/transcripts.js';
 import reminderRoutes from './routes/reminders.js';
 import taskRoutes from './routes/tasks.js';
+import conversationRoutes from './routes/conversations.js';
+import peopleRoutes from './routes/people.js';
+import followupRoutes from './routes/followups.js';
+import networkRoutes from './routes/network.js';
+import intelligenceRoutes from './routes/intelligence.js';
+
 
 dotenv.config();
 
@@ -80,6 +86,11 @@ apiV1Router.use('/health', healthRoutes);
 apiV1Router.use('/transcribe', transcriptRoutes);
 apiV1Router.use('/reminders', reminderRoutes);
 apiV1Router.use('/tasks', taskRoutes);
+apiV1Router.use('/conversations', conversationRoutes);
+apiV1Router.use('/people', peopleRoutes);
+apiV1Router.use('/followups', followupRoutes);
+apiV1Router.use('/network', networkRoutes);
+apiV1Router.use('/intelligence', intelligenceRoutes);
 
 app.use('/api/v1', apiV1Router);
 
