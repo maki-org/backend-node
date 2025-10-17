@@ -12,6 +12,14 @@ import { analyzeMakiConversation } from '../services/makiService.js';
 import Conversation from '../models/Conversation.js';
 import Person from '../models/Person.js';
 import FollowUp from '../models/FollowUp.js';
+import { 
+  validatePersonProfile, 
+  validateRelationship, 
+  validateCommunication, 
+  validateSentiment,
+  validateTaskReminder,
+  validateFollowUp 
+} from '../utils/schemaValidator.js';
 
 
 
@@ -195,15 +203,12 @@ async function processMakiAnalysis(transcriptId, transcript, userId, accountName
   try {
     logger.info('Starting MAKI analysis...');
     
-    // Run MAKI analysis
+    // STEP 1: Get basic conversation data
     let analysis = await analyzeMakiConversation(transcript, accountName);
     
     if (!analysis || !analysis.conversation_metadata) {
       throw new Error('MAKI analysis returned invalid data');
     }
-
-    // SANITIZE DATA BEFORE PROCESSING
-    analysis = sanitizeMakiData(analysis);
 
     const results = {
       conversation: null,
@@ -217,29 +222,54 @@ async function processMakiAnalysis(transcriptId, transcript, userId, accountName
     const conversationData = {
       userId,
       transcriptId,
-      title: analysis.conversation_metadata.title,
-      summary: analysis.conversation_metadata.summary,
+      title: analysis.conversation_metadata.title || 'Untitled Conversation',
+      summary: {
+        short: analysis.conversation_metadata.summary?.short || '',
+        extended: analysis.conversation_metadata.summary?.extended || ''
+      },
       conversationDate: new Date(),
-      duration: analysis.conversation_metadata.duration_minutes,
-      tags: analysis.conversation_metadata.tags || [],
+      duration: Number(analysis.conversation_metadata.duration_minutes) || 0,
+      tags: Array.isArray(analysis.conversation_metadata.tags) ? analysis.conversation_metadata.tags : [],
       participants: [],
       actionItems: [],
       pendingFollowups: [],
       processingStatus: 'completed',
     };
 
-    // Process speakers and create/update Person profiles
-    for (const speaker of analysis.speakers || []) {
-      if (speaker.is_user) {
-        conversationData.participants.push({
-          speakerLabel: speaker.speaker_label,
-          name: accountName,
-          isUser: true,
-        });
-        continue;
-      }
+    // Add user to participants
+    const userSpeaker = analysis.speakers?.find(s => s.is_user);
+    if (userSpeaker) {
+      conversationData.participants.push({
+        speakerLabel: userSpeaker.speaker_label || 'SPEAKER 1',
+        name: accountName,
+        isUser: true,
+      });
+    }
 
-      if (!speaker.name) continue;
+    // Collect non-user speakers
+    const nonUserSpeakers = (analysis.speakers || [])
+      .filter(s => !s.is_user && s.name && s.name !== 'Unknown')
+      .map(s => s.name);
+
+    // STEP 2: Extract detailed profiles
+    let personProfiles = { profiles: [] };
+    if (nonUserSpeakers.length > 0) {
+      try {
+        personProfiles = await extractPersonProfiles(transcript, nonUserSpeakers);
+      } catch (profileError) {
+        logger.error('Profile extraction failed:', profileError.message);
+      }
+    }
+
+    // Process non-user speakers
+    for (const speaker of analysis.speakers || []) {
+      if (speaker.is_user) continue;
+      if (!speaker.name || speaker.name === 'Unknown') continue;
+
+      // Find matching profile
+      const profile = personProfiles.profiles?.find(p => 
+        p.name.toLowerCase() === speaker.name.toLowerCase()
+      );
 
       // Find or create Person
       let person = await Person.findOne({
@@ -248,272 +278,179 @@ async function processMakiAnalysis(transcriptId, transcript, userId, accountName
       });
 
       if (!person) {
-        // Create new person with sanitized data
+        //  CREATE WITH VALIDATED DATA
         person = await Person.create({
           userId,
           name: speaker.name,
-          initials: speaker.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2),
-          relationship: speaker.profile?.relationship || {},
-          communication: {
+          initials: speaker.name.charAt(0).toUpperCase(),
+          relationship: validateRelationship(profile?.relationship),
+          communication: validateCommunication({
             lastContacted: new Date(),
-            frequency: speaker.profile?.communication?.frequency || 'rarely',
+            frequency: profile?.communication?.frequency || 'rarely',
             totalConversations: 1,
             conversationCounter: 1,
-          },
-          sentiment: speaker.profile?.sentiment || {
-            closenessScore: 0.5,
-            tone: 'neutral',
-          },
-          profile: {
-            summary: speaker.profile?.summary || '',
-            keyInfo: speaker.profile?.key_info || {},
-            commonTopics: speaker.profile?.common_topics || [],
-            importantDates: speaker.profile?.important_dates || [],
-          },
+          }),
+          sentiment: validateSentiment(profile?.sentiment),
+          profile: validatePersonProfile(profile),
         });
-        
-        results.people.push(person);
         logger.info(`Created new person: ${person.name}`);
       } else {
-        // Update existing person
+        //  UPDATE WITH VALIDATED DATA
         person.communication.lastContacted = new Date();
         person.communication.totalConversations += 1;
         person.communication.conversationCounter += 1;
-        
-        if (speaker.profile?.summary) {
-          person.profile.summary = speaker.profile.summary;
-        }
-        if (speaker.profile?.sentiment) {
-          person.sentiment = {
-            ...person.sentiment,
-            ...speaker.profile.sentiment,
-            lastAssessment: new Date(),
-          };
-        }
-        
-        // Merge key info with sanitized data
-        if (speaker.profile?.key_info) {
-          const mergeArrays = (existing = [], newItems = []) => {
-            return [...new Set([...existing, ...newItems])];
-          };
+
+        // Merge profile data
+        if (profile) {
+          const validatedProfile = validatePersonProfile(profile);
           
-          const keyInfo = speaker.profile.key_info;
+          // Merge arrays without duplicates
+          const mergeArrays = (existing = [], incoming = []) => {
+            return [...new Set([...existing, ...incoming])];
+          };
+
           person.profile.keyInfo = {
-            hobbies: mergeArrays(person.profile.keyInfo?.hobbies, keyInfo.hobbies),
-            interests: mergeArrays(person.profile.keyInfo?.interests, keyInfo.interests),
+            hobbies: mergeArrays(person.profile.keyInfo?.hobbies, validatedProfile.keyInfo.hobbies),
+            interests: mergeArrays(person.profile.keyInfo?.interests, validatedProfile.keyInfo.interests),
             favorites: {
-              movies: mergeArrays(person.profile.keyInfo?.favorites?.movies, keyInfo.favorites?.movies),
-              music: mergeArrays(person.profile.keyInfo?.favorites?.music, keyInfo.favorites?.music),
-              books: mergeArrays(person.profile.keyInfo?.favorites?.books, keyInfo.favorites?.books),
-              food: mergeArrays(person.profile.keyInfo?.favorites?.food, keyInfo.favorites?.food),
+              movies: mergeArrays(person.profile.keyInfo?.favorites?.movies, validatedProfile.keyInfo.favorites.movies),
+              music: mergeArrays(person.profile.keyInfo?.favorites?.music, validatedProfile.keyInfo.favorites.music),
+              books: mergeArrays(person.profile.keyInfo?.favorites?.books, validatedProfile.keyInfo.favorites.books),
+              food: mergeArrays(person.profile.keyInfo?.favorites?.food, validatedProfile.keyInfo.favorites.food),
             },
-            travel: mergeArrays(person.profile.keyInfo?.travel, keyInfo.travel),
-            workInfo: keyInfo.work_info || person.profile.keyInfo?.workInfo,
+            travel: mergeArrays(person.profile.keyInfo?.travel, validatedProfile.keyInfo.travel),
+            workInfo: validatedProfile.keyInfo.workInfo.company ? validatedProfile.keyInfo.workInfo : person.profile.keyInfo?.workInfo,
             personalInfo: {
-              relatives: mergeArrays(person.profile.keyInfo?.personalInfo?.relatives, keyInfo.personal_info?.relatives),
-              pets: mergeArrays(person.profile.keyInfo?.personalInfo?.pets, keyInfo.personal_info?.pets),
-              location: mergeArrays(person.profile.keyInfo?.personalInfo?.location, keyInfo.personal_info?.location),
-              birthdate: keyInfo.personal_info?.birthdate || person.profile.keyInfo?.personalInfo?.birthdate,
+              relatives: mergeArrays(person.profile.keyInfo?.personalInfo?.relatives, validatedProfile.keyInfo.personalInfo.relatives),
+              pets: mergeArrays(person.profile.keyInfo?.personalInfo?.pets, validatedProfile.keyInfo.personalInfo.pets),
+              location: mergeArrays(person.profile.keyInfo?.personalInfo?.location, validatedProfile.keyInfo.personalInfo.location),
+              birthdate: validatedProfile.keyInfo.personalInfo.birthdate || person.profile.keyInfo?.personalInfo?.birthdate,
             },
           };
-        }
-
-        // Merge important dates
-        if (speaker.profile?.important_dates && Array.isArray(speaker.profile.important_dates)) {
-          person.profile.importantDates = [
-            ...(person.profile.importantDates || []),
-            ...speaker.profile.important_dates
-          ];
-        }
-
-        // Merge common topics
-        if (speaker.profile?.common_topics && Array.isArray(speaker.profile.common_topics)) {
-          person.profile.commonTopics = [
-            ...(person.profile.commonTopics || []),
-            ...speaker.profile.common_topics
-          ];
         }
         
         await person.save();
-        results.people.push(person);
         logger.info(`Updated person: ${person.name}`);
       }
 
+      results.people.push(person);
+
       conversationData.participants.push({
         personId: person._id,
-        speakerLabel: speaker.speaker_label,
+        speakerLabel: speaker.speaker_label || 'SPEAKER',
         name: person.name,
         isUser: false,
       });
     }
 
-    // Store action items in conversation
-    if (analysis.action_items) {
+    // Store action items
+    if (Array.isArray(analysis.action_items)) {
       conversationData.actionItems = analysis.action_items.map(item => ({
-        description: item.description || item.task,
-        assignedTo: item.assigned_to || item.assignee,
-        speaker: item.from_speaker,
+        description: item?.description || '',
+        assignedTo: item?.assigned_to || '',
+        speaker: item?.from_speaker || '',
         completed: false,
       }));
     }
 
-    
-// Create conversation
-const conversation = await Conversation.create(conversationData);
-results.conversation = conversation;
-logger.info(`Created conversation: ${conversation.title}`);
+    // Create conversation
+    const conversation = await Conversation.create(conversationData);
+    results.conversation = conversation;
+    logger.info(`Created conversation: ${conversation.title}`);
 
-//  EXTRACT TASKS DIRECTLY (no filtering)
-if (analysis.tasks && analysis.tasks.length > 0) {
-  const taskDocs = analysis.tasks.map((task) => ({
-    transcriptId: transcriptId,
-    userId: userId,
-    filename: conversation.title,
-    title: task.title,
-    from: task.from,
-    dueDate: task.due_date_text ? parseDateTimeFromText(task.due_date_text) : null,
-    dueDateText: task.due_date_text,
-    priority: task.priority || 'medium',
-    category: 'task', 
-    extractedFrom: task.extracted_from,
-    completed: false,
-  }));
-  
-  const createdTasks = await Task.insertMany(taskDocs);
-  results.tasks = createdTasks;
-  logger.info(`Created ${createdTasks.length} tasks`);
-}
-
-//  EXTRACT REMINDERS DIRECTLY (no filtering)
-if (analysis.reminders && analysis.reminders.length > 0) {
-  const reminderDocs = analysis.reminders.map((reminder) => ({
-    transcriptId: transcriptId,
-    userId: userId,
-    filename: conversation.title,
-    title: reminder.title,
-    from: reminder.from,
-    dueDate: reminder.due_date_text ? parseDateTimeFromText(reminder.due_date_text) : null,
-    dueDateText: reminder.due_date_text,
-    priority: reminder.priority || 'medium',
-    category: reminder.category || 'meeting', // Use category from LLM
-    extractedFrom: reminder.extracted_from,
-    completed: false,
-  }));
-  
-  const createdReminders = await Reminder.insertMany(reminderDocs);
-  results.reminders = createdReminders;
-  logger.info(`Created ${createdReminders.length} reminders`);
-}
-
-//  CREATE PENDING FOLLOW-UPS (with fallback person creation)
-if (analysis.pending_followups && analysis.pending_followups.length > 0) {
-  const followUpDocs = [];
-  
-  for (const followup of analysis.pending_followups) {
-    logger.info(`Processing followup for person: ${followup.person}`);
-    
-    let person = await Person.findOne({
-      userId,
-      name: { $regex: new RegExp(`^${followup.person}$`, 'i') },
-    });
-    
-    // Create person if not exists
-    if (!person) {
-      logger.info(`Creating new person for followup: ${followup.person}`);
-      person = await Person.create({
-        userId,
-        name: followup.person,
-        initials: followup.person.charAt(0).toUpperCase(),
-        relationship: { type: 'acquaintance' },
-        communication: {
-          frequency: 'rarely',
-          totalConversations: 0,
-          conversationCounter: 0,
-        },
-        sentiment: {
-          closenessScore: 0.5,
-          tone: 'neutral',
-        },
-      });
-    }
-    
-    followUpDocs.push({
-      userId,
-      personId: person._id,
-      conversationId: conversation._id,
-      type: 'pending',
-      priority: followup.priority || 'medium',
-      context: followup.description,
-    });
-  }
-  
-  if (followUpDocs.length > 0) {
-    const createdFollowUps = await FollowUp.insertMany(followUpDocs);
-    results.followups = createdFollowUps;
-    logger.info(`Created ${followUpDocs.length} pending follow-ups`);
-  }
-}
-
-//  CREATE SUGGESTED FOLLOW-UPS
-if (analysis.suggested_followups && analysis.suggested_followups.length > 0) {
-  const followUpDocs = [];
-  
-  for (const followup of analysis.suggested_followups) {
-    let person = await Person.findOne({
-      userId,
-      name: { $regex: new RegExp(`^${followup.person}$`, 'i') },
-    });
-    
-    if (person) {
-      followUpDocs.push({
-        userId,
-        personId: person._id,
-        conversationId: conversation._id,
-        type: 'suggested',
-        priority: followup.priority || 'low',
-        context: followup.reason,
-        reason: followup.reason,
-      });
-    }
-  }
-  
-  if (followUpDocs.length > 0) {
-    const createdSuggestedFollowUps = await FollowUp.insertMany(followUpDocs);
-    results.followups = [...results.followups, ...createdSuggestedFollowUps];
-    logger.info(`Created ${followUpDocs.length} suggested follow-ups`);
-  }
-}
-
-    // Process network connections
-    if (analysis.network_connections && analysis.network_connections.length > 0) {
-      for (const connection of analysis.network_connections) {
-        const person1 = await Person.findOne({
+    //  CREATE TASKS WITH VALIDATION
+    if (Array.isArray(analysis.tasks) && analysis.tasks.length > 0) {
+      const taskDocs = analysis.tasks.map((task) => {
+        const validated = validateTaskReminder(task);
+        return {
+          transcriptId,
           userId,
-          name: { $regex: new RegExp(`^${connection.person1}$`, 'i') },
+          filename: conversation.title,
+          title: validated.title,
+          from: validated.from,
+          dueDate: validated.dueDateText ? parseDateTimeFromText(validated.dueDateText) : null,
+          dueDateText: validated.dueDateText,
+          priority: validated.priority,
+          category: 'task',
+          extractedFrom: validated.extractedFrom,
+          completed: false,
+        };
+      });
+      
+      const createdTasks = await Task.insertMany(taskDocs);
+      results.tasks = createdTasks;
+      logger.info(`Created ${createdTasks.length} tasks`);
+    }
+
+    //  CREATE REMINDERS WITH VALIDATION
+    if (Array.isArray(analysis.reminders) && analysis.reminders.length > 0) {
+      const reminderDocs = analysis.reminders.map((reminder) => {
+        const validated = validateTaskReminder(reminder);
+        return {
+          transcriptId,
+          userId,
+          filename: conversation.title,
+          title: validated.title,
+          from: validated.from,
+          dueDate: validated.dueDateText ? parseDateTimeFromText(validated.dueDateText) : null,
+          dueDateText: validated.dueDateText,
+          priority: validated.priority,
+          category: validated.category,
+          extractedFrom: validated.extractedFrom,
+          completed: false,
+        };
+      });
+      
+      const createdReminders = await Reminder.insertMany(reminderDocs);
+      results.reminders = createdReminders;
+      logger.info(`Created ${createdReminders.length} reminders`);
+    }
+
+    //  CREATE FOLLOW-UPS WITH VALIDATION
+    if (Array.isArray(analysis.pending_followups) && analysis.pending_followups.length > 0) {
+      const followUpDocs = [];
+      
+      for (const followup of analysis.pending_followups) {
+        const validated = validateFollowUp(followup);
+        
+        let person = await Person.findOne({
+          userId,
+          name: { $regex: new RegExp(`^${validated.person}$`, 'i') },
         });
         
-        const person2 = await Person.findOne({
-          userId,
-          name: { $regex: new RegExp(`^${connection.person2}$`, 'i') },
-        });
-        
-        if (person1 && person2) {
-          if (!person1.connections) person1.connections = [];
-          
-          const hasConnection = person1.connections.some(
-            c => c.personId.toString() === person2._id.toString()
-          );
-          
-          if (!hasConnection) {
-            person1.connections.push({
-              personId: person2._id,
-              relationshipType: connection.relationship_type,
-              strength: connection.strength || 0.5,
-            });
-            await person1.save();
-            logger.info(`Created connection: ${person1.name} -> ${person2.name}`);
-          }
+        // Create person if not exists
+        if (!person) {
+          person = await Person.create({
+            userId,
+            name: validated.person,
+            initials: validated.person.charAt(0).toUpperCase(),
+            relationship: { type: 'acquaintance' },
+            communication: {
+              frequency: 'rarely',
+              totalConversations: 0,
+              conversationCounter: 0,
+            },
+            sentiment: {
+              closenessScore: 0.5,
+              tone: 'neutral',
+            },
+          });
         }
+        
+        followUpDocs.push({
+          userId,
+          personId: person._id,
+          conversationId: conversation._id,
+          type: 'pending',
+          priority: validated.priority,
+          context: validated.description,
+        });
+      }
+      
+      if (followUpDocs.length > 0) {
+        const createdFollowUps = await FollowUp.insertMany(followUpDocs);
+        results.followups = createdFollowUps;
+        logger.info(`Created ${followUpDocs.length} pending follow-ups`);
       }
     }
 
@@ -598,7 +535,7 @@ router.post(
           id: makiAnalysis?.conversation?._id,
           title: makiAnalysis?.conversation?.title,
           summary: makiAnalysis?.conversation?.summary,
-          participants: makiAnalysis?.conversation?.participants || [], // ✅ Correct path
+          participants: makiAnalysis?.conversation?.participants || [], //  Correct path
         },
         extracted: {
           tasks: makiAnalysis?.tasks?.length || 0,

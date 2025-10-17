@@ -83,7 +83,7 @@ const personSchema = new mongoose.Schema({
         relatives: [String],
         pets: [String],
         birthdate: String,
-        location: [String],  // ✅ CHANGED FROM String TO [String]
+        location: [String],  //  CHANGED FROM String TO [String]
       },
     },
     
