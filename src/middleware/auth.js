@@ -7,6 +7,7 @@ export const authenticateUser = requireAuth();
 
 export const syncUserToDatabase = async (req, res, next) => {
   try {
+    //  FIX: Call req.auth() as a function
     const authData = req.auth();
     const userId = authData?.userId;
 
@@ -14,19 +15,39 @@ export const syncUserToDatabase = async (req, res, next) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
+    //  FIX: Find existing user first
     let user = await User.findOne({ clerkId: userId });
 
     if (!user) {
-      const clerkUser = await clerkClient.users.getUser(userId);
+      // User doesn't exist, fetch from Clerk and create
+      try {
+        const clerkUser = await clerkClient.users.getUser(userId);
 
-      user = await User.create({
-        clerkId: userId,
-        email: clerkUser.emailAddresses[0]?.emailAddress,
-        firstName: clerkUser.firstName,
-        lastName: clerkUser.lastName,
-      });
+        user = await User.create({
+          clerkId: userId,
+          email: clerkUser.emailAddresses[0]?.emailAddress,
+          firstName: clerkUser.firstName,
+          lastName: clerkUser.lastName,
+        });
 
-      logger.info(`New user synced to database: ${userId}`);
+        logger.info(`New user synced to database: ${userId}`);
+      } catch (createError) {
+        
+        if (createError.code === 11000) {
+          // User was created by another request, fetch it
+          user = await User.findOne({ clerkId: userId });
+          if (!user) {
+            throw new Error('User creation race condition');
+          }
+          logger.info(`User already exists (race condition handled): ${userId}`);
+        } else {
+          throw createError;
+        }
+      }
+    } else {
+     
+      user.lastActive = new Date();
+      await user.save();
     }
 
     req.user = user;
@@ -73,13 +94,18 @@ export const clerkWebhookHandler = async (req, res) => {
   try {
     switch (type) {
       case 'user.created':
-        await User.create({
-          clerkId: data.id,
-          email: data.email_addresses[0]?.email_address,
-          firstName: data.first_name,
-          lastName: data.last_name,
-        });
-        logger.info(`User created via webhook: ${data.id}`);
+        
+        await User.findOneAndUpdate(
+          { clerkId: data.id },
+          {
+            clerkId: data.id,
+            email: data.email_addresses[0]?.email_address,
+            firstName: data.first_name,
+            lastName: data.last_name,
+          },
+          { upsert: true, new: true }
+        );
+        logger.info(`User created/updated via webhook: ${data.id}`);
         break;
 
       case 'user.updated':
