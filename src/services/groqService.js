@@ -5,33 +5,116 @@ export const extractInsights = async (transcript) => {
   try {
     const groq = getGroqClient();
 
-    const prompt = `Analyze the following transcript and extract insights.
+    const prompt = `You are an intelligent transcription and conversation-analysis system called MAKI.
+
+
+
+
+Your goal is to convert a raw multi-speaker conversation into structured conversational intelligence.
+
+You will receive a transcript or diarized conversation between two or more speakers.  
+Perform the following steps carefully and return a valid JSON object conforming exactly to the schema below.
 
 Transcript:
 ${transcript}
 
-Extract the following information:
-1. Number of speakers detected in the conversation (analyze speech patterns, topics discussed, and conversation flow to determine the actual number of unique speakers)
-2. Action items for each speaker
-3. Key information shared by each speaker
-4. Any reminders or time-sensitive tasks mentioned
+---
 
-For speaker detection:
-- Analyze conversation patterns, topic changes, and speaking styles
-- Return the detected speaker count as "detected_speakers": number
-- If you detect N speakers, structure insights for SPEAKER 1 through SPEAKER N
+1. Identify speakers.
+   - Detect all unique voices or names in the dialogue.
+   - If a name is explicitly mentioned (e.g., “Hey Viswajit”), assign that name to the speaker.
+   - If no name is found, assume the first person to speak is the **user**, unless metadata specifies otherwise.
+   - If the name of a converser matches the account name in metadata, mark \"is_user\": true.
+   - \"Maintain\" a \"conversation_counter\" for how many times this person has been spoken to before.
 
-For reminders, extract:
-- title: Brief description of what needs to be done
-- from: Which speaker mentioned it
-- due_date_text: EXACTLY what was said about when (e.g., "tomorrow at 2pm", "next Friday", "by end of week"). If NO specific time/date is mentioned, set this to null
-- priority: "high", "normal", or "low" based on urgency
-- category: "meeting", "call", "task", "deadline", or "personal"
-- extracted_from: The exact phrase from the transcript
+2. Extract structured data.
+   - **Title:** Generate a short, descriptive title summarizing the conversation.
+   - **Summary:** Create two summaries — one short one-liner and one extended five-liner.
+   - **Transcript:** Clean, labeled text (e.g., “DEV:” / “VISW:”).
+   - **Action Items:** Any concrete commitments or to-dos (e.g., “I’ll send the file tomorrow”).
+   - **Reminders:** Any time-bound events or mentions (“meeting at 5 PM”).
+   - **Pending Followups:** Any mention of “I need to call”, “I need to follow up”, “remind me to”, etc.
+   - **Suggested Followups:** Based on the user’s known contacts or context, recommend who to reconnect with.
 
-Return ONLY a valid JSON object with this exact structure:
+3. Build the Personal Intelligence Profile for each converser.
+   For every person (except the user):
+   - Role / relationship (friend, client, colleague, investor, etc.)
+   - Context of acquaintance (workplace, event, etc.)
+   - Last contacted date (if extractable)
+   - Communication frequency (daily, weekly, rarely, etc.)
+   - Sentiment or closeness (scale 0–1 based on warmth and tone)
+   - Summary of the person
+   - Key information:
+       • Hobbies
+       • Names of close ones
+       • Favorite movies or music
+       • Places of interest
+       • General interests
+
+   Infer these when implicit cues are present (e.g., “We should grab coffee again” → friend relationship).
+
+4. Output only JSON. No explanation, no additional commentary.
+
+---
+
+Return the final output strictly following this JSON schema:
+
 {
-    "detected_speakers": number,
+  "conversation": {
+    "conversation_id": "<uuid>",
+    "title": "Catch-up with Viswajit about the new AI module",
+    "summary": {
+      "short": "Discussion about MAKI’s new transcription module.",
+      "extended": "Dev and Viswajit discuss improving the transcription module using Whisper v3 Turbo and Llama 3.3. They cover user-speaker mapping, task extraction, and personal intelligence integration."
+    },
+    "transcript": [
+      {"speaker": "DEV", "text": "Hey Viswajit, did you finish linking the backend?"},
+      {"speaker": "VISW", "text": "Almost done, I’ll push the updates tonight."}
+    ],
+    "action_items": [
+      {"task": "Push backend updates to repository", "assignee": "Viswajit", "deadline": null}
+    ],
+    "reminders": [
+      {"event": "Team sync tomorrow at 10 AM", "date": "2025-10-17T10:00:00Z"}
+    ],
+    "pending_followups": [
+      "I need to follow up with Jay regarding the API key."
+    ],
+    "suggested_followups": [
+      {"person_name": "Jay Krishna", "reason": "Recent mention in context of follow-up"}
+    ],
+    "participants": [
+      {
+        "name": "Dev Nandan Anoop",
+        "is_user": true,
+        "conversation_counter": 12
+      },
+      {
+        "name": "Viswajit",
+        "is_user": false,
+        "conversation_counter": 8
+      }
+    ]
+  },
+  "personal_intelligence": [
+    {
+      "name": "Viswajit",
+      "role": "Co-founder / Developer",
+      "relationship_context": "Startup Project MAKI",
+      "last_contacted": "2025-10-16",
+      "communication_frequency": "Daily",
+      "sentiment_closeness": 0.85,
+      "summary": "Collaborates frequently with Dev on backend integration; appears motivated and aligned with project goals.",
+      "key_information": {
+        "hobbies": ["coding", "music"],
+        "close_relations": [],
+        "movies_music": ["Tron Legacy OST"],
+        "places_of_interest": ["Technopark Trivandrum"],
+        "interests": ["AI tools", "automation"]
+      }
+    }
+  ]
+  "detected_speakers": number,
     "speakers": {
         "SPEAKER 1": {
             "action_items": ["list of action items"],
@@ -54,6 +137,14 @@ Return ONLY a valid JSON object with this exact structure:
     ]
 }
 
+---
+
+Important:
+- Output **only JSON** matching this format.  
+- Ensure logical consistency between transcript, action items, and personal intelligence.  
+- Do not invent absurd or unrealistic information — infer only what’s reasonably supported by the conversation.
+
+
 Important: Only include reminders that have clear action items. Set due_date_text to null if no specific time is mentioned.`;
 
     logger.info('Extracting insights from transcript');
@@ -66,6 +157,7 @@ Important: Only include reminders that have clear action items. Set due_date_tex
     });
 
     const insights = JSON.parse(response.choices[0].message.content);
+    logger.debug('Insights JSON:', insights);
     logger.info('Insights extracted successfully');
 
     return insights;
