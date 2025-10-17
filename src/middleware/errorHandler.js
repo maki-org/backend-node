@@ -1,12 +1,15 @@
 import logger from '../utils/logger.js';
 
 export const errorHandler = (err, req, res, next) => {
+
+  const authData = typeof req.auth === 'function' ? req.auth() : req.auth;
+  
   logger.error({
     message: err.message,
     stack: err.stack,
     url: req.originalUrl,
     method: req.method,
-    userId: req.auth?.userId,
+    userId: authData?.userId,
   });
 
   if (err.name === 'ValidationError') {

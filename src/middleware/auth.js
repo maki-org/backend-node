@@ -7,7 +7,8 @@ export const authenticateUser = requireAuth();
 
 export const syncUserToDatabase = async (req, res, next) => {
   try {
-    const { userId } = req.auth;
+    const authData = req.auth();
+    const userId = authData?.userId;
 
     if (!userId) {
       return res.status(401).json({ error: 'Unauthorized' });

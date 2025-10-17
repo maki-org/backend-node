@@ -5,42 +5,23 @@ export const analyzeMakiConversation = async (transcript, accountName) => {
   try {
     const groq = getGroqClient();
 
-    const prompt = `System role: Active Listening Agent (Codename: MAKI)
-You are an intelligent transcription and conversation-analysis system.
-Your goal is to convert a raw multi-speaker transcript into structured conversational intelligence.
-
+    const prompt = `You are an AI conversation analyzer. Extract key information from this transcript.
+    
 Account Name: ${accountName}
 
-Conversation Transcript:
+Transcript:
 ${transcript}
 
-CRITICAL: Return ONLY valid JSON. No markdown, no code blocks, no explanations.
+CRITICAL: Return ONLY valid JSON. NO markdown, NO explanations, NO code blocks.
 
-Perform the following analysis and return a valid JSON object:
-
-1. **Identify Speakers**: Detect all unique speakers. If a name is explicitly mentioned, use it. If the first speaker matches the account name, mark "is_user": true.
-
-2. **Extract Structured Data**:
-   - title: Short descriptive title (5-8 words)
-   - summary: { short: "one-line summary", extended: "five-line detailed summary" }
-   - action_items: [{description, assigned_to, from_speaker, extracted_from}]
-   - reminders: [{title, from, due_date_text, priority, category, extracted_from}]
-   - pending_followups: [{description, person, extracted_from, priority}]
-
-3. **Build Personal Intelligence Profile for EACH non-user speaker**:
-   - Extract name, relationship, communication frequency
-   - Extract hobbies, interests, favorites, work info
-   - IMPORTANT: For dates, ONLY use ISO format strings like "2025-12-15" or descriptive text like "December 2025"
-   - IMPORTANT: location must be an array of strings like ["New York", "Tokyo"]
-
-Return ONLY valid JSON with this EXACT structure:
+Extract and return this EXACT JSON structure:
 
 {
   "conversation_metadata": {
-    "title": "string",
+    "title": "Brief title (5-8 words)",
     "summary": {
-      "short": "string",
-      "extended": "string"
+      "short": "One sentence",
+      "extended": "2-3 sentences max"
     },
     "duration_minutes": 30,
     "tags": ["meeting", "work"],
@@ -49,115 +30,95 @@ Return ONLY valid JSON with this EXACT structure:
   "speakers": [
     {
       "speaker_label": "SPEAKER 1",
-      "name": "John Doe",
-      "is_user": true,
+      "name": "Name or Unknown",
+      "is_user": true/false,
       "profile": {
         "relationship": {
-          "type": "colleague",
-          "subtype": "manager",
+          "type": "colleague/friend/family/client/other",
+          "subtype": "team member",
           "source": "workplace"
         },
         "communication": {
-          "frequency": "weekly"
+          "frequency": "daily/weekly/monthly/quarterly/yearly/rarely"
         },
         "sentiment": {
-          "closenessScore": 0.8,
-          "tone": "professional"
+          "closenessScore": 0.7,
+          "tone": "professional/warm/neutral/formal/casual"
         },
-        "summary": "Brief profile summary",
+        "summary": "One sentence about this person",
         "key_info": {
-          "hobbies": ["hiking", "photography"],
-          "interests": ["AI", "technology"],
+          "hobbies": [],
+          "interests": ["AI"],
           "favorites": {
-            "movies": ["Inception"],
-            "music": ["Jazz"],
-            "books": ["1984"],
+            "movies": [],
+            "music": [],
+            "books": [],
             "food": ["Italian"]
           },
-          "travel": ["Japan", "Europe"],
+          "travel": [],
           "work_info": {
-            "company": "TechCorp",
-            "position": "Engineer",
-            "industry": "Technology"
+            "company": "",
+            "position": "",
+            "industry": ""
           },
           "personal_info": {
-            "relatives": ["brother Alex"],
-            "pets": ["dog named Max"],
-            "birthdate": "March 15",
-            "location": ["San Francisco", "New York"]
+            "relatives": [],
+            "pets": [],
+            "birthdate": "",
+            "location": []
           }
         },
-        "common_topics": [
-          {
-            "topic": "project planning",
-            "frequency": 5
-          }
-        ],
-        "important_dates": [
-          {
-            "date": "2025-12-15",
-            "description": "Conference in Tokyo",
-            "type": "travel"
-          }
-        ]
+        "common_topics": [],
+        "important_dates": []
       }
     }
   ],
   "action_items": [
     {
-      "description": "Review document",
-      "assigned_to": "Sarah",
+      "description": "Brief description",
+      "assigned_to": "Person name",
       "from_speaker": "SPEAKER 1",
-      "extracted_from": "I need you to review..."
+      "extracted_from": "Quote from transcript"
+    }
+  ],
+  "tasks": [
+    {
+      "title": "Task title",
+      "from": "SPEAKER 1",
+      "due_date_text": "Thursday/Friday afternoon/next week",
+      "priority": "high/medium/low",
+      "extracted_from": "Quote"
     }
   ],
   "reminders": [
     {
-      "title": "Client meeting",
+      "title": "Reminder title",
       "from": "SPEAKER 1",
-      "due_date_text": "Friday 2 PM",
-      "priority": "high",
-      "category": "meeting",
-      "extracted_from": "We have a meeting..."
+      "due_date_text": "Friday at 2 PM",
+      "priority": "high/medium/low",
+      "category": "meeting/call/personal",
+      "extracted_from": "Quote"
     }
   ],
   "pending_followups": [
     {
-      "description": "Call Mike from TechCorp",
-      "person": "Mike",
-      "extracted_from": "I need to follow up...",
-      "priority": "medium"
+      "description": "Follow up description",
+      "person": "Person name",
+      "extracted_from": "Quote",
+      "priority": "high/medium/low"
     }
   ],
-  "suggested_followups": [
-    {
-      "person": "Lisa",
-      "reason": "Haven't talked in a while",
-      "priority": "low"
-    }
-  ],
-  "network_connections": [
-    {
-      "person1": "Sarah",
-      "person2": "Alex",
-      "relationship_type": "siblings",
-      "strength": 0.9
-    }
-  ]
+  "suggested_followups": [],
+  "network_connections": []
 }
 
-CRITICAL RULES:
-1. Return ONLY the JSON object, no extra text
-2. All dates must be strings in ISO format (YYYY-MM-DD) or descriptive text like "Wednesday" or "December 15"
-3. important_dates MUST be an array of objects with this EXACT structure:
-   [
-     {"date": "2025-12-15", "description": "text", "type": "birthday"},
-     {"date": "Wednesday", "description": "text", "type": "deadline"}
-   ]
-4. location MUST be an array of strings: ["New York", "Tokyo"]
-5. ALL arrays must contain actual objects or strings, NOT stringified JSON
-6. Do NOT use single quotes in JSON - use double quotes only
-7. Do not wrap any values in extra quotes or stringify them`;
+RULES:
+1. Use DOUBLE QUOTES only
+2. Keep descriptions brief
+3. Don't extract empty data - use [] for empty arrays
+4. All dates as text strings like "Thursday", "Friday at 2 PM", "next week"
+5. Extract only CLEAR, EXPLICIT information from transcript
+6. Return COMPLETE, VALID JSON`;
 
     logger.info('Starting MAKI conversation analysis');
 
@@ -166,14 +127,26 @@ CRITICAL RULES:
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3,
       response_format: { type: 'json_object' },
-      max_tokens: 8000,
+      max_tokens: 16000, // Increased
     });
 
     let analysis;
     try {
-      analysis = JSON.parse(response.choices[0].message.content);
+      const rawResponse = response.choices[0].message.content;
+      logger.info('Raw MAKI response length:', rawResponse.length);
+      
+      // Clean up response
+      let cleanedResponse = rawResponse
+        .trim()
+        .replace(/```json\n?/g, '')
+        .replace(/```\n?/g, '')
+        .replace(/^[^{]*({.*})[^}]*$/s, '$1'); // Extract only JSON object
+      
+      analysis = JSON.parse(cleanedResponse);
     } catch (parseError) {
-      logger.error('Failed to parse MAKI response:', response.choices[0].message.content);
+      logger.error('Failed to parse MAKI response');
+      logger.error('Response preview:', response.choices[0].message.content.substring(0, 500));
+      logger.error('Response end:', response.choices[0].message.content.substring(response.choices[0].message.content.length - 200));
       throw new Error('MAKI returned invalid JSON');
     }
 
