@@ -14,9 +14,11 @@ Account Name: ${accountName}
 Conversation Transcript:
 ${transcript}
 
+CRITICAL: Return ONLY valid JSON. No markdown, no code blocks, no explanations.
+
 Perform the following analysis and return a valid JSON object:
 
-1. **Identify Speakers**: Detect all unique speakers. If a name is explicitly mentioned, use it. If the first speaker matches the account name, mark "is_user": true. Maintain a "conversation_counter" for repeat interactions.
+1. **Identify Speakers**: Detect all unique speakers. If a name is explicitly mentioned, use it. If the first speaker matches the account name, mark "is_user": true.
 
 2. **Extract Structured Data**:
    - title: Short descriptive title (5-8 words)
@@ -24,71 +26,153 @@ Perform the following analysis and return a valid JSON object:
    - action_items: [{description, assigned_to, from_speaker, extracted_from}]
    - reminders: [{title, from, due_date_text, priority, category, extracted_from}]
    - pending_followups: [{description, person, extracted_from, priority}]
-   - suggested_followups: Based on conversation warmth and relationship strength
 
 3. **Build Personal Intelligence Profile for EACH non-user speaker**:
-   - name: Extracted or inferred name
-   - relationship: {type, subtype, source}
-   - communication: {frequency: "daily/weekly/monthly/quarterly/yearly/rarely"}
-   - sentiment: {closeness_score: 0-1, tone: "warm/neutral/formal/casual/professional"}
-   - summary: Brief profile of this person based on the conversation
-   - key_info: {
-       hobbies: [],
-       interests: [],
-       favorites: {movies: [], music: [], books: [], food: []},
-       travel: [],
-       work_info: {company, position, industry},
-       personal_info: {relatives: [], pets: [], location: []}
-     }
-   - common_topics: [{topic, frequency}]
-   - important_dates: [{date, description, type}]
+   - Extract name, relationship, communication frequency
+   - Extract hobbies, interests, favorites, work info
+   - IMPORTANT: For dates, ONLY use ISO format strings like "2025-12-15" or descriptive text like "December 2025"
+   - IMPORTANT: location must be an array of strings like ["New York", "Tokyo"]
 
-4. **Network Analysis**:
-   - connections: [{person1, person2, relationship_type, strength: 0-1}]
+Return ONLY valid JSON with this EXACT structure:
 
-Return ONLY valid JSON with this structure:
 {
   "conversation_metadata": {
     "title": "string",
-    "summary": {"short": "string", "extended": "string"},
-    "duration_minutes": number,
-    "tags": ["string"],
-    "detected_speakers": number
+    "summary": {
+      "short": "string",
+      "extended": "string"
+    },
+    "duration_minutes": 30,
+    "tags": ["meeting", "work"],
+    "detected_speakers": 2
   },
   "speakers": [
     {
       "speaker_label": "SPEAKER 1",
-      "name": "string or null",
-      "is_user": boolean,
+      "name": "John Doe",
+      "is_user": true,
       "profile": {
-        // Full personal intelligence profile as specified above
+        "relationship": {
+          "type": "colleague",
+          "subtype": "manager",
+          "source": "workplace"
+        },
+        "communication": {
+          "frequency": "weekly"
+        },
+        "sentiment": {
+          "closenessScore": 0.8,
+          "tone": "professional"
+        },
+        "summary": "Brief profile summary",
+        "key_info": {
+          "hobbies": ["hiking", "photography"],
+          "interests": ["AI", "technology"],
+          "favorites": {
+            "movies": ["Inception"],
+            "music": ["Jazz"],
+            "books": ["1984"],
+            "food": ["Italian"]
+          },
+          "travel": ["Japan", "Europe"],
+          "work_info": {
+            "company": "TechCorp",
+            "position": "Engineer",
+            "industry": "Technology"
+          },
+          "personal_info": {
+            "relatives": ["brother Alex"],
+            "pets": ["dog named Max"],
+            "birthdate": "March 15",
+            "location": ["San Francisco", "New York"]
+          }
+        },
+        "common_topics": [
+          {
+            "topic": "project planning",
+            "frequency": 5
+          }
+        ],
+        "important_dates": [
+          {
+            "date": "2025-12-15",
+            "description": "Conference in Tokyo",
+            "type": "travel"
+          }
+        ]
       }
     }
   ],
-  "action_items": [],
-  "reminders": [],
-  "pending_followups": [],
-  "suggested_followups": [
-    {"person": "string", "reason": "string", "priority": "high/medium/low"}
+  "action_items": [
+    {
+      "description": "Review document",
+      "assigned_to": "Sarah",
+      "from_speaker": "SPEAKER 1",
+      "extracted_from": "I need you to review..."
+    }
   ],
-  "network_connections": []
+  "reminders": [
+    {
+      "title": "Client meeting",
+      "from": "SPEAKER 1",
+      "due_date_text": "Friday 2 PM",
+      "priority": "high",
+      "category": "meeting",
+      "extracted_from": "We have a meeting..."
+    }
+  ],
+  "pending_followups": [
+    {
+      "description": "Call Mike from TechCorp",
+      "person": "Mike",
+      "extracted_from": "I need to follow up...",
+      "priority": "medium"
+    }
+  ],
+  "suggested_followups": [
+    {
+      "person": "Lisa",
+      "reason": "Haven't talked in a while",
+      "priority": "low"
+    }
+  ],
+  "network_connections": [
+    {
+      "person1": "Sarah",
+      "person2": "Alex",
+      "relationship_type": "siblings",
+      "strength": 0.9
+    }
+  ]
 }
 
-IMPORTANT: Only include information explicitly mentioned or strongly implied in the conversation. Use null for unknown fields.`;
+CRITICAL RULES:
+1. Return ONLY the JSON object, no extra text
+2. All dates must be strings in ISO format (YYYY-MM-DD) or descriptive text
+3. important_dates must be array of objects with date/description/type as strings
+4. location must be array of strings
+5. All arrays must contain proper objects or strings, not stringified JSON
+6. Do not wrap JSON in code blocks or markdown`;
 
     logger.info('Starting MAKI conversation analysis');
 
     const response = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [{ role: 'user', content: prompt }],
-      temperature: 0.4,
+      temperature: 0.3,
       response_format: { type: 'json_object' },
       max_tokens: 8000,
     });
 
-    const analysis = JSON.parse(response.choices[0].message.content);
-    logger.info('MAKI analysis completed successfully');
+    let analysis;
+    try {
+      analysis = JSON.parse(response.choices[0].message.content);
+    } catch (parseError) {
+      logger.error('Failed to parse MAKI response:', response.choices[0].message.content);
+      throw new Error('MAKI returned invalid JSON');
+    }
 
+    logger.info('MAKI analysis completed successfully');
     return analysis;
   } catch (error) {
     logger.error(`MAKI analysis error: ${error.message}`);
@@ -96,12 +180,10 @@ IMPORTANT: Only include information explicitly mentioned or strongly implied in 
   }
 };
 
-
 export const calculateSuggestedFollowUps = async (userId, Person) => {
   try {
     const now = new Date();
     const suggestions = [];
-
 
     const people = await Person.find({ userId });
 
