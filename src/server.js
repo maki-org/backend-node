@@ -83,7 +83,7 @@ app.get('/', (req, res) => {
 const apiV1Router = express.Router();
 
 apiV1Router.use('/health', healthRoutes);
-apiV1Router.use('/transcribe', transcriptRoutes);
+apiV1Router.use('/transcripts', transcriptRoutes);
 apiV1Router.use('/reminders', reminderRoutes);
 apiV1Router.use('/tasks', taskRoutes);
 apiV1Router.use('/conversations', conversationRoutes);
